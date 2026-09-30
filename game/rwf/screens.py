@@ -413,7 +413,7 @@ class CountdownOverlay(Screen):
         if core.pointer_locked() is False:
             _center(surf, 'CLICK TO LOCK MOUSE', self.TEXT_Y + 86, 'm', KEY_COL)
         else:
-            _center(surf, 'MOVE AND LOOK - WEAPONS HOT AT ZERO', self.TEXT_Y + 90, 's', MUTED)
+            _center(surf, 'GET READY', self.TEXT_Y + 90, 's', MUTED)
 
 
 # ============================ PAUSE ==========================================

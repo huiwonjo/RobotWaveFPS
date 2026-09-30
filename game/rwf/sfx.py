@@ -410,11 +410,18 @@ def _on_sfx(d):
 
 
 def _on_objective(d):
-    if d.get('state') in ('captured', 'capturing'):
+    st = d.get('state')
+    if st == _st.get('obj'):
+        return                          # transitions only (the HUD ticks once per second while capturing)
+    _st['obj'] = st
+    if st in ('captured', 'capturing'):
         play('capture', 0.7)
+    elif st in ('contested', 'overtime', 'failed'):
+        play('warn', 0.5)
 
 
 def _on_wave_start(d):
+    _st['obj'] = None
     play('wave', 0.6)
 
 
@@ -436,5 +443,6 @@ _MAP = (('shot', _on_shot), ('ability_used', _on_ability_used), ('damage', _on_d
 def attach(bus):
     """Subscribe the event -> sound mapping on a match's bus (called once per match by app).
     'ability_ready' is played by the HUD, which knows the ability's cooldown (spec 6.4: >= 4 s only)."""
+    _st['obj'] = None
     for name, fn in _MAP:
         bus.on(name, fn)

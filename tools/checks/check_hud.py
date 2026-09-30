@@ -184,6 +184,44 @@ def check_hud_draws_all_heroes(h):
     return ', '.join(notes)
 
 
+def check_hud_directions_and_transitions(h):
+    """Arc direction (a hit from the player's right draws the arc right of the crosshair), the objective
+    marker pinned to the screen edge when the point is behind, and objective events handled on state
+    transitions only (a director may emit them every frame)."""
+    from rwf import hud as hud_mod, render
+    w = h.make_world()                      # (2.5, 7.5) facing east
+    w.director = FakeDirector()
+    hud = hud_mod.HUD(w)
+    surf = h.screen
+    p = w.player
+    render.render_frame(surf, w)
+    w.bus.emit('player_hurt', amount=10.0, from_x=p.x, from_y=p.y + 3.0, ability='bolt')   # +y is to the right
+    hud.update(w, 1 / 30)
+    hud.draw(surf, w)
+    right = tuple(surf.get_at((512 + hud_mod.ARC_R, 384)))[:3]
+    left = tuple(surf.get_at((512 - hud_mod.ARC_R, 384)))[:3]
+    assert right[0] > 180 and right[1] < 90, 'arc not on the right: %r' % (right,)
+    assert not (left[0] > 180 and left[1] < 90), 'arc also on the left: %r' % (left,)
+    mx, my = hud.marker_pos
+    assert 'marker' in hud.drawn and 0 <= mx <= 1024 and 0 <= my <= 768, 'marker %r' % (hud.marker_pos,)
+    h.place(w, 2.5, 7.5, math.pi)           # facing west: the point (10, 10) is behind
+    render.render_frame(surf, w)
+    hud.update(w, 1 / 30)
+    hud.draw(surf, w)
+    mx, my = hud.marker_pos
+    assert mx in (hud_mod.MARKER_MARGIN, 1024 - hud_mod.MARKER_MARGIN), 'behind: marker x %r not at an edge' % mx
+    w.bus.emit('objective', state='captured', progress=1.0, time_left=40.0)
+    t0 = hud.banner[1]
+    for _ in range(5):
+        hud.update(w, 1 / 30)
+        w.bus.emit('objective', state='captured', progress=1.0, time_left=40.0)
+    assert hud.banner is not None and hud.banner[1] == t0, 'repeated objective events restarted the banner'
+    for _ in range(80):
+        hud.update(w, 1 / 30)
+    assert hud.banner is None, 'banner never expired'
+    return 'arc right %r, behind marker at x %d' % (right, mx)
+
+
 def check_hud_layout_no_overlap(h):
     """The old overlaps are gone: minimap / score / feed / wave text at the top, and the bottom row (hero
     panel + HP bar, status chips, ult ring, tiles, ammo) never intersect each other."""

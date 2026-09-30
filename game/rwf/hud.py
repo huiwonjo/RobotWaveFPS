@@ -478,6 +478,8 @@ class HUD:
         self.ghost = None               # per-pool "recently lost" values
         self._ghost_hold = GHOST_DELAY
         self._obj_tick = -9.0
+        self._obj_state = None
+        self.marker_pos = None
         self.drawn = set()
         bus = world.bus
         for name, fn in (('damage', self._on_damage), ('kill', self._on_kill),
@@ -546,6 +548,7 @@ class HUD:
             sfx.play('ability_ready', 0.6)
 
     def _on_wave_start(self, d):
+        self._obj_state = None
         wi = d.get('wave_in_stage', d.get('wave', 0))
         self.banner = ([('WAVE %d' % wi, 'xl', WHITE), (str(d.get('label', '')), 'l', theme.PALETTE['accent'])],
                        self.t, BANNER_LIFE)
@@ -555,6 +558,9 @@ class HUD:
 
     def _on_objective(self, d):
         st = d.get('state')
+        if st == self._obj_state:
+            return                      # the director may emit every frame: react to transitions only
+        self._obj_state = st
         if st == 'captured':
             self.banner = ([(OBJ_LABELS['captured'], 'xl', OBJ_COLORS['captured'])], self.t, BANNER_LIFE)
         elif st == 'failed':
@@ -777,6 +783,7 @@ class HUD:
         tx = int(core.clamp(x - t.get_width() // 2, 2, C.W - t.get_width() - 2))
         surf.blit(core.text('A %dm' % dist_m, 'xs', SHADOW), (tx + 1, y + hh + 4))
         surf.blit(t, (tx, y + hh + 3))
+        self.marker_pos = (x, y)
         self.drawn.add('marker')
 
     def _draw_arcs(self, surf, world):
