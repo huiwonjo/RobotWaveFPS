@@ -5,7 +5,7 @@ States inside a match: COUNTDOWN, PLAYING, PAUSED, INTERMISSION, END_BANNER, POT
 import asyncio
 import time
 import traceback
-from collections import namedtuple
+from collections import deque, namedtuple
 
 import pygame
 
@@ -28,6 +28,10 @@ from . import sfx
 MatchResult = namedtuple('MatchResult', 'action world stats states frames frame_ms exception')
 
 SIM_STATES = ('COUNTDOWN', 'PLAYING', 'INTERMISSION')
+# 6.1: COUNTDOWN allows only move and look. These actions are dropped from the input before the world
+# update while counting down (a key or button still held when PLAYING starts acts from then on).
+COMBAT_ACTIONS = ('fire', 'alt', 'ab1', 'ab2', 'ult', 'reload', 'melee')
+LIVE_HISTORY = 600          # frames of states / frame_ms kept by a live (non-harness) match
 _perf = time.perf_counter
 _app = {'inp': None, 'clock': None, 'sfx_init': False, 'debug': False, 'toast': ('', 0.0), 'frozen': None}
 
@@ -116,8 +120,14 @@ class _Match:
         self.overlay = None
         self.resume_state = 'PLAYING'
         self.resume_overlay = None
-        self.states = []
-        self.frame_ms = []
+        # the harness reads every frame's state and time; a live match keeps only a short history
+        if input_source is not None or fixed_dt is not None:
+            self.states = []
+            self.frame_ms = []
+        else:
+            self.states = deque(maxlen=LIVE_HISTORY)
+            self.frame_ms = deque(maxlen=LIVE_HISTORY)
+        self._published = None
         self.frame_i = 0
         self.action = None
         self.done = False
@@ -152,12 +162,21 @@ class _Match:
         self.world.director.start()
         self.seen_lock = False
 
+    def _freeze(self):
+        """Copy a clean frame (world, effects, viewmodel, HUD; no overlay screen, debug overlay or
+        toast) into self.frozen, for PAUSED and END_BANNER. The world is not advanced."""
+        try:
+            self._draw_sim(0.0, record=False)
+        except Exception:
+            pass
+        self.frozen.blit(self.screen, (0, 0))
+
     def pause(self):
         if self.state not in SIM_STATES:
             return
         self.resume_state = self.state
         self.resume_overlay = self.overlay
-        self.frozen.blit(self.screen, (0, 0))
+        self._freeze()
         self.world.clock.paused = True
         self.inp.clear()
         core.lock_mouse(False)
@@ -174,7 +193,7 @@ class _Match:
 
     def _end_banner(self):
         if self.state != 'PAUSED':
-            self.frozen.blit(self.screen, (0, 0))
+            self._freeze()
         self.world.clock.paused = True
         core.lock_mouse(False)
         self.state = 'END_BANNER'
@@ -273,15 +292,21 @@ class _Match:
             self.pause()
 
     def frame(self):
-        t0 = _perf()
         w = self.world
         inp = self.inp
         if self.fixed_dt is not None:
             real_dt = self.fixed_dt
         else:
             real_dt = min(self.clock.tick(60) / 1000.0, 0.1)
+        t0 = _perf()                    # after the frame-limiter wait: perf['total'] is work time only
         self._events()
         inp.poll_keyboard()
+        if self.state == 'COUNTDOWN':
+            held = inp.held
+            pressed = inp.pressed
+            for a in COMBAT_ACTIONS:
+                held.discard(a)
+                pressed.discard(a)
         kill_at = w.debug.get('kill_player_at')
         if kill_at is not None and self.frame_i == kill_at and not w.over:
             w.player.pool.health = 0.0
@@ -326,26 +351,37 @@ class _Match:
         self.frame_ms.append(total)
         if w.debug.get('perf') or _app['debug']:
             w.perf = {'update': (t2 - t1) * 1000.0, 'render': t_render, 'hud': t_hud, 'total': total}
+        if self.state != self._published:
+            self._published = self.state
+            core.web_set('RWF_STATE', self.state)
         self.frame_i += 1
         return not self.done
 
-    def _draw(self, real_dt, t_start):
+    def _draw_sim(self, real_dt, record=True):
+        """World + effect draw_screen + hero draw_overlay + viewmodel + HUD (7.6 steps 5-7), without the
+        overlay screen. Returns the perf_counter time at which the world render ended."""
         scr = self.screen
         w = self.world
+        scene = render.render_frame(scr, w)
+        if record:
+            self.rec.record(w, scene)
+        t1 = _perf()
+        for ef in w.effects:
+            ef.draw_screen(scr, w)
+        p = w.player
+        p.draw_overlay(scr, w)
+        p.draw_viewmodel(scr, w)
+        self.hud.update(w, real_dt)
+        self.hud.draw(scr, w)
+        return t1
+
+    def _draw(self, real_dt, t_start):
+        scr = self.screen
         st = self.state
         t_render = t_hud = 0.0
         if st in SIM_STATES:
-            scene = render.render_frame(scr, w)
-            self.rec.record(w, scene)
-            t1 = _perf()
+            t1 = self._draw_sim(real_dt)
             t_render = (t1 - t_start) * 1000.0
-            for ef in w.effects:
-                ef.draw_screen(scr, w)
-            p = w.player
-            p.draw_overlay(scr, w)
-            p.draw_viewmodel(scr, w)
-            self.hud.update(w, real_dt)
-            self.hud.draw(scr, w)
             if self.overlay is not None:
                 self.overlay.draw(scr)
             t_hud = (_perf() - t1) * 1000.0
@@ -354,7 +390,7 @@ class _Match:
             self.overlay.draw(scr)
         elif self.overlay is not None:
             self.overlay.draw(scr)
-        if _app['debug']:
+        if _app['debug'] and st != 'SUMMARY':
             render.draw_debug(scr, self._debug_lines())
         msg, until = _app['toast']
         if msg and core.real_time() < until:
@@ -364,10 +400,10 @@ class _Match:
     def _debug_lines(self):
         w = self.world
         pf = w.perf or {}
-        ms = self.frame_ms[-30:]
         if self.fixed_dt is None:
             fps = self.clock.get_fps()
         else:
+            ms = self.frame_ms[-30:]
             fps = 1000.0 * len(ms) / sum(ms) if ms and sum(ms) > 0 else 0.0
         d = w.director
         p = w.player
@@ -409,12 +445,13 @@ async def run_match(screen, hero_key, *, input_source=None, fixed_dt=None, max_f
     core.lock_mouse(False)
     if m is None:
         return MatchResult(None, None, None, [], 0, [], exc)
-    return MatchResult(m.action, m.world, m.stats, m.states, m.frame_i, m.frame_ms, exc)
+    return MatchResult(m.action, m.world, m.stats, list(m.states), m.frame_i, list(m.frame_ms), exc)
 
 
-async def _run_screen(screen, scr, clock):
+async def _run_screen(screen, scr, clock, name):
     inp = get_input()
     core.lock_mouse(False)
+    core.web_set('RWF_STATE', name)
     while True:
         real_dt = min(clock.tick(60) / 1000.0, 0.1)
         for ev in pygame.event.get():
@@ -444,16 +481,19 @@ async def _run_screen(screen, scr, clock):
 
 
 async def main():
+    """TITLE -> HERO_SELECT -> matches. PLAY AGAIN ('again' on SUMMARY) replays with the hero the match
+    ENDED with, i.e. the one the summary shows (it differs from the locked-in hero after an intermission
+    swap); H - HERO SELECT opens the select screen with that hero highlighted."""
     screen = init_display()
     clock = _clock()
     hero_key = core.HERO_ORDER[0]
     mode = 'title'
     while mode != 'quit':
         if mode == 'title':
-            act = await _run_screen(screen, screens.TitleScreen(), clock)
+            act = await _run_screen(screen, screens.TitleScreen(), clock, 'TITLE')
             mode = 'quit' if act == 'quit' else 'select'
         elif mode == 'select':
-            act = await _run_screen(screen, screens.HeroSelectScreen(hero_key), clock)
+            act = await _run_screen(screen, screens.HeroSelectScreen(hero_key), clock, 'HERO_SELECT')
             if act == 'quit':
                 mode = 'quit'
             elif act.startswith('lock:') and act[5:] in core.HEROES:
@@ -461,6 +501,8 @@ async def main():
                 mode = 'match'
         else:
             res = await run_match(screen, hero_key)
+            if res.world is not None and res.world.player is not None:
+                hero_key = res.world.player.KEY
             if res.exception:
                 print(res.exception)
                 mode = 'title'

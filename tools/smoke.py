@@ -18,15 +18,20 @@ Harness API for check modules (spec 9.1, plus a few helpers):
         Timeline entries: ('tap', f, action) | ('hold', f, action, n) | ('look', f, dx, dy)
                           | ('aim', f, angle, pitch) | ('call', f, fn(world))
         on_frame(world, i, state) runs after frame i; return 'stop' to end the run.
-    h.spawn(world, kind, fwd, side=0.0, **attrs) -> Enemy   (relative to the player's facing;
-        slides forward then sideways from the player and stops at walls, so it never spawns inside one)
+    h.spawn(world, kind, fwd, side=0.0, **attrs) -> Enemy   (relative to the player's facing, side > 0
+        to the right; slides forward then sideways from the player and stops at walls, so it never spawns
+        inside one; a clamp of more than 0.05 prints a NOTE line through h.log)
     h.place(world, x, y, angle=0.0, pitch=0.0)
+    h.ROOMY = (9.5, 12.5, -pi/2)    h.place(w, *h.ROOMY) before spawning wide layouts (the default start
+        is a 1-cell corridor); hero_contract() uses it
     h.tap_next(action, hold=1)      press on the next frame (use from on_frame)
     h.hero_contract(key)            generic hero contract (spec 9.3 step 1); raises on failure
     h.make_world(hero='vector', seed=1, debug=None) -> World (with WaveDirector, not running)
     h.screen                        the 1024x768 display surface
     h.save(surf, name)              write tools/out/<name>.png when --shots is given
-    h.count_surfaces(on) / h.big_surfaces   Surface allocations >= 256x256 while counting
+    h.count_surfaces(on) / h.big_surfaces   Surface allocations >= 256x256 while counting (pygame.Surface
+        is swapped for a counting subclass only while counting; isinstance(x, pygame.Surface) keeps working)
+    h.log(msg)                      print an indented note under the current check
     Result: .world .events [(frame, name, data)] .exception .frame_ms .states .action .frames
             .count(name, **match) .first(name, **match) .total(name, key, **match) .where(name, **match)
             match values are plain (==) or callables (predicate on the payload value).
@@ -174,11 +179,22 @@ class Harness:
 
     # --- surface counting (rule 12) ----------------------------------------------------
     def _install_counter(self):
+        """pygame.Surface is swapped for a counting subclass ONLY between count_surfaces(True) and
+        count_surfaces(False). Its metaclass keeps isinstance(x, pygame.Surface) True for every surface
+        (also those made by transform/font/copy) while the swap is active, so game code behaves the same
+        under the harness as in the shipped game."""
         pg = self.pg
         base = pg.Surface
         harness = self
 
-        class CountingSurface(base):
+        class _SurfaceMeta(type):
+            def __instancecheck__(cls, obj):
+                return isinstance(obj, base)
+
+            def __subclasscheck__(cls, sub):
+                return issubclass(sub, base)
+
+        class CountingSurface(base, metaclass=_SurfaceMeta):
             def __init__(self, *a, **k):
                 base.__init__(self, *a, **k)
                 if harness._counting:
@@ -187,12 +203,14 @@ class Harness:
                         harness.big_surfaces += 1
         self._counting = False
         self.big_surfaces = 0
-        pg.Surface = CountingSurface
+        self._base_surface = base
+        self._counting_surface = CountingSurface
 
     def count_surfaces(self, on):
         if on and not self._counting:
             self.big_surfaces = 0
         self._counting = bool(on)
+        self.pg.Surface = self._counting_surface if on else self._base_surface
 
     # --- helpers ---------------------------------------------------------------------
     def log(self, msg):
@@ -221,7 +239,15 @@ class Harness:
         world._sync_camera()
         world.rebuild_flow()
 
+    # Open floor for wide layouts: from (9.5, 12.5) facing north, the centre room spans x 8.0-12.0 for
+    # y 8-12 (1.5 cells to the left, 2.5 to the right; side > 0 is to the right) and 5 cells ahead is the
+    # open row y = 7.5. The default start (2.5, 7.5) facing east is a 1-cell corridor, so sideways offsets
+    # there get clamped by walls (y 7.3-7.7 for a 0.3-radius dummy).
+    ROOMY = (9.5, 12.5, -math.pi / 2)
+
     def spawn(self, world, kind, fwd, side=0.0, **attrs):
+        """Spawn relative to the player's facing. Walls clamp the position (never inside a wall); a clamp
+        of more than 0.05 is reported through h.log, so a layout that silently collapsed is visible."""
         from rwf.world import move_slide
         from rwf import core
         p = world.player
@@ -229,6 +255,12 @@ class Harness:
         r = getattr(core.ENEMY_TYPES[kind], 'radius', 0.3)
         x, y = move_slide(p.x, p.y, math.cos(a) * fwd, math.sin(a) * fwd, r)
         x, y = move_slide(x, y, -math.sin(a) * side, math.cos(a) * side, r)
+        wx = p.x + math.cos(a) * fwd - math.sin(a) * side
+        wy = p.y + math.sin(a) * fwd + math.cos(a) * side
+        if math.hypot(x - wx, y - wy) > 0.05:
+            self.log('NOTE: h.spawn(%s, fwd=%.2f, side=%.2f) from (%.2f, %.2f) was clamped by walls to '
+                     '(%.2f, %.2f) instead of (%.2f, %.2f); use h.place(w, *h.ROOMY) for wide layouts'
+                     % (kind, fwd, side, p.x, p.y, x, y, wx, wy))
         e = world.spawn_enemy(kind, x, y)
         e.angle = math.atan2(p.y - y, p.x - x)
         for k, v in attrs.items():
@@ -268,6 +300,8 @@ class Harness:
                     return '%s #%d inside a wall at (%.2f, %.2f)' % (e.KIND, e.id, e.x, e.y)
         if alive > C.CAP_ALIVE + C.CAP_SUMMONS:
             return 'alive enemies %d > cap' % alive
+        if w.los_used > C.CAP_LOS_PER_FRAME:
+            return 'LOS checks %d > %d per frame' % (w.los_used, C.CAP_LOS_PER_FRAME)
         for label, n, cap in (('projectiles', len(w.projectiles), C.CAP_PROJECTILES),
                               ('particles', len(w.particles), C.CAP_PARTICLES),
                               ('effects', len(w.effects), C.CAP_EFFECTS),
@@ -340,8 +374,10 @@ class Harness:
     def hero_contract(self, key):
         import pygame
         seen = {'barrier': False}
+        home_x, home_y, home_a = self.ROOMY
 
         def setup(w):
+            self.place(w, home_x, home_y, home_a)       # room for the 3-wide layout (no wall clamping)
             for side in (-0.6, 0.0, 0.6):
                 self.spawn(w, 'dummy', 4.0, side)
 
@@ -351,7 +387,7 @@ class Harness:
 
         tl = [('hold', 10, 'fire', 60), ('hold', 100, 'alt', 20), ('tap', 150, 'ab1'), ('tap', 200, 'ab2'),
               ('look', 250, 150, 0), ('look', 262, -300, 0), ('look', 274, 150, 0), ('look', 286, 0, -40),
-              ('look', 298, 0, 40), ('aim', 330, 0.0, 0.0),
+              ('look', 298, 0, 40), ('aim', 330, home_a, 0.0),
               ('tap', 400, 'ult'), ('hold', 450, 'fire', 40), ('tap', 520, 'reload'), ('tap', 560, 'melee'),
               ('tap', 700, 'melee')]
         r = self.run(key, 900, timeline=tl, debug={'inf_ult': True}, setup=setup, on_frame=on_frame,

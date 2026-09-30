@@ -255,10 +255,14 @@ class Hero(Entity):
         self.x, self.y = move_slide(self.x, self.y, vx * sp, vy * sp, self.radius)
 
     # --- shared actions -------------------------------------------------------------
-    def fire_hitscan(self, world, damage, *, spread=0.0, falloff=None, ability='primary', angle=None, pitch=None):
+    def fire_hitscan(self, world, damage, *, spread=0.0, falloff=None, ability='primary', angle=None, pitch=None,
+                     allow_crit=True, used_slot='primary'):
         """One hitscan trace. falloff = (full_until, zero_at, min_mult). Applies falloff, then crit.
 
-        angle / pitch default to the view; pass them to aim elsewhere (e.g. an auto-aim ult)."""
+        angle / pitch default to the view; pass them to aim elsewhere (e.g. an auto-aim ult).
+        allow_crit=False: never crits (no x2, crit False in 'damage' / 'shot' and on the returned Hit),
+        e.g. VECTOR Lock-On. Emits 'shot', then 'ability_used' with slot used_slot and name
+        label_for(used_slot); used_slot=None skips 'ability_used' (e.g. extra traces of one shot)."""
         rng = world.rng
         ang = self.angle if angle is None else angle
         pitch = self.pitch if pitch is None else pitch
@@ -266,6 +270,8 @@ class Hero(Entity):
             ang += rng.uniform(-spread, spread)
             pitch += rng.uniform(-spread * C.H, spread * C.H)
         hit = hitscan(world, self, ang, pitch)
+        if not allow_crit:
+            hit.crit = False
         self.last_fire = world.now
         if hit.kind == 'enemy':
             dmg = float(damage)
@@ -285,7 +291,8 @@ class Hero(Entity):
                 spark(world, hit.x - math.cos(ang) * 0.05, hit.y - math.sin(ang) * 0.05, hit.z, (255, 220, 150), 2)
         world.bus.emit('shot', hero=self.KEY, hit=hit.kind == 'enemy', crit=bool(hit.crit), kind=hit.kind,
                        x=hit.x, y=hit.y)
-        world.bus.emit('ability_used', hero=self.KEY, slot='primary', name=self.label_for('primary'))
+        if used_slot:
+            world.bus.emit('ability_used', hero=self.KEY, slot=used_slot, name=self.label_for(used_slot))
         return hit
 
     def quick_melee(self, world):

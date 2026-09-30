@@ -86,6 +86,12 @@ class EventBus:
         self._subs = {}
 
 
+# ============================ settings =======================================
+# Session settings any module may READ (screens show them on the pause panel). app changes them:
+# 'sens' = look-sensitivity multiplier ([ and ], 0.4-2.5). The mute state lives in sfx.muted.
+SETTINGS = {'sens': 1.0}
+
+
 # ============================ input ==========================================
 _KEY_ITEMS = tuple(C.KEYMAP.items())
 _KEY_ACTIONS = frozenset(C.KEYMAP.values())
@@ -94,8 +100,8 @@ _KEY_ACTIONS = frozenset(C.KEYMAP.values())
 class InputState:
     """Actions (not keys). Events and key.get_pressed() are OR'd (spec 2.1).
 
-    Mouse buttons come from events only. `sens` is the look-sensitivity multiplier
-    (changed with [ and ]); it lives here because one InputState spans matches.
+    Mouse buttons come from events only. `sens` (the look-sensitivity multiplier) reads and writes
+    core.SETTINGS['sens'], so screens can show it without an InputState.
     """
 
     def __init__(self):
@@ -105,10 +111,17 @@ class InputState:
         self.mouse_dx = 0.0
         self.mouse_dy = 0.0
         self.mouse_pos = (C.W // 2, C.H // 2)
-        self.sens = 1.0
         self._ev_keys = set()       # key codes held according to events
         self._mouse_held = set()    # actions held by mouse buttons
         self._prev = set()          # held snapshot after the last poll
+
+    @property
+    def sens(self):
+        return SETTINGS['sens']
+
+    @sens.setter
+    def sens(self, v):
+        SETTINGS['sens'] = float(v)
 
     def _held_by_events(self, action):
         if action in self._mouse_held:
@@ -308,6 +321,21 @@ def pointer_locked():
         return bool(pygame.event.get_grab())
     except Exception:
         return None
+
+
+_web_failed = [False]
+
+
+def web_set(name, value):
+    """Browser only: window[name] = value (a test hook: app publishes RWF_STATE for tools/webtest.py).
+    A no-op on desktop; the first failure disables it for the session."""
+    if not IS_WEB or _web_failed[0]:
+        return
+    try:
+        import platform as _web_platform     # pygbag's browser bridge module
+        setattr(_web_platform.window, name, value)
+    except Exception:
+        _web_failed[0] = True
 
 
 # ============================ registries =====================================

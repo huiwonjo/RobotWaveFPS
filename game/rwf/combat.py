@@ -193,9 +193,17 @@ class Enemy(Entity):
     """Base for every enemy kind. Subclasses set KIND, SCORE, BASE_*, radius/height/width/head_band.
 
     Helpers for AI code: decision_due(world) (0.2 s staggered tick), has_los(world)
-    (budgeted, re-checked at most 5x/s), can_attack(world), face_player(world),
-    move_toward, fire_bolt, melee, dist_to_player, remove_silently.
-    fire_bolt/melee take the STAGE-1 damage; dmg_mult (stage scaling) is applied inside.
+    (LOS to the PLAYER, budgeted, re-checked at most 5x/s), can_attack(world), face_player(world),
+    move_toward, move_dir, fire_bolt, melee, dist_to_player, remove_silently.
+
+    Damage scaling: fire_bolt() and melee() take the STAGE-1 damage and multiply by dmg_mult inside.
+    enemy_hits_player(), splash() and apply_damage() do NOT scale: pass `base * self.dmg_mult` yourself
+    (detonator blast, warden stomp, slicer lunge ...), and don't scale twice.
+    Credit: pass the enemy itself as `source` for damage it does to other enemies (detonator blast):
+    it gets no credit or score (only source is world.player does), and the kill event's killer is then
+    theme.enemy_name(KIND) instead of ''.
+    Barriers: a barrier whose owner is dead or dying is dropped by World.update (step 9), so an enemy
+    removed with remove_silently() never leaves its barrier behind.
     """
     KIND = 'enemy'
     SCORE = 0
@@ -281,6 +289,12 @@ class Enemy(Entity):
         return math.hypot(p.x - self.x, p.y - self.y)
 
     def move_toward(self, world, tx, ty, dt, speed_mult=1.0):
+        """Spec 4.4 "normal movement" toward the PLAYER: world.flow.toward(), blended with direct
+        steering toward (tx, ty) only while has_los() (LOS to the player) and (tx, ty) is within 3 cells
+        (full direct steering within 1.5). Farther out, or without LOS, it follows the flow field, and
+        the flow field always leads to the player's cell, whatever (tx, ty) is. So pass the player's
+        position (or a point near it). For any other motion (strafing, backing away along flow.away,
+        a flank point, a lunge, holding a range) use move_dir()."""
         now = world.now
         st = self.status
         if not st.can_move(now):
@@ -313,6 +327,27 @@ class Enemy(Entity):
             step = d
         self.x, self.y = move_slide(self.x, self.y, vx * step, vy * step, self.radius)
         self.angle = math.atan2(vy, vx)
+
+    def move_dir(self, world, ux, uy, dt, speed_mult=1.0, *, speed=None, face=True):
+        """Walk along direction (ux, uy) (any length; normalised here) with wall sliding, honouring
+        root/stun/pinned and slows. Speed is self.speed x speed_mult, or `speed` cells/s when given
+        (e.g. a 9 cells/s lunge). face=True turns toward the motion. Returns the distance moved."""
+        now = world.now
+        st = self.status
+        if not st.can_move(now):
+            return 0.0
+        m = math.hypot(ux, uy)
+        if m < 1e-9:
+            return 0.0
+        base = self.speed * speed_mult if speed is None else float(speed)
+        step = base * st.speed_mult(now) * dt
+        if step <= 0.0:
+            return 0.0
+        ox, oy = self.x, self.y
+        self.x, self.y = move_slide(ox, oy, ux / m * step, uy / m * step, self.radius)
+        if face:
+            self.angle = math.atan2(uy, ux)
+        return math.hypot(self.x - ox, self.y - oy)
 
     def fire_bolt(self, world, angle, speed, damage, radius=0.12, color=(255, 70, 50), ttl=1.25):
         off = self.radius + 0.05
@@ -440,7 +475,14 @@ def _is_hero(ent):
 
 
 def apply_damage(world, target, amount, source=None, *, ability='primary', crit=False, from_xy=None):
-    """The one way HP goes down (spec 5.2). Crit x2 is applied by the CALLER. Returns damage dealt."""
+    """The one way HP goes down (spec 5.2). Crit x2 is applied by the CALLER. Returns damage dealt.
+
+    'kill' is emitted for EVERY death, the player's included (then target is world.player, name is the
+    hero NAME and killer the enemy's display name): kill feeds, pop-ups, stats and POTG must skip
+    `d['target'] is world.player`. killer is the hero NAME for player kills, theme.enemy_name(KIND) when
+    source is an enemy, and '' when source is None. label is source.label_for(ability) when the source
+    has one (heroes), else ability.upper().
+    """
     if target is None or not target.alive or amount <= 0:
         return 0.0
     now = world.now
@@ -608,10 +650,20 @@ def spark(world, x, y, z, color, n=3):
 class Projectile:
     """Collides in 2D (substeps <= 0.25 cells). ox/oy = where it was fired from.
 
-    on_hit(world, proj, target_or_None, x, y) -> bool: True means you did the impact
-    yourself. It is called with target None for walls, and also (return value ignored)
-    after an other-team barrier has absorbed damage + splash_center.
+    on_hit(world, proj, target, x, y) -> bool is called on every impact, BEFORE the default one:
+      - target is an Enemy (player projectile): default impact = apply_damage(damage, + splash_center
+        when splash_r > 0) + splash() around it that excludes it + a spark;
+      - target is the player (enemy projectile): default impact = apply_damage(damage) + a spark;
+      - target is a Barrier (isinstance(target, combat.Barrier)) of the other team, unless
+        through_barriers: default impact = target.take(damage + splash_center, owner) + a blue spark,
+        with NO splash behind the barrier;
+      - target is None for a wall: default impact = splash() at the wall (if splash_r > 0) + a spark.
+    Return True when you did the impact yourself; the default one is then skipped. Either way the
+    projectile dies afterwards, except that a pierce projectile goes on after an Enemy/player hit.
     on_expire(world, proj) runs when ttl runs out. draw(scene, proj) replaces the default orb.
+
+    Projectile has __slots__, so extra state cannot be set on a plain instance. Subclass it (a subclass
+    without __slots__ gets a __dict__): `class Bomb(Projectile): pass`, then `b = Bomb(...); b.stuck = e`.
     """
     __slots__ = ('x', 'y', 'z', 'vx', 'vy', 'radius', 'team', 'damage', 'splash_r', 'splash_center',
                  'splash_edge', 'ttl', 'pierce', 'through_barriers', 'hit_ids', 'owner', 'ability', 'color',
@@ -669,11 +721,13 @@ class Projectile:
                         if t is not None:
                             hx = px + (nx - px) * t * 0.98
                             hy = py + (ny - py) * t * 0.98
-                            b.take(world, self.damage + self.splash_center, self.owner)
-                            spark(world, hx, hy, self.z, (120, 200, 255))
                             self.alive = False
+                            done = False
                             if self.on_hit is not None:
-                                self.on_hit(world, self, None, hx, hy)
+                                done = bool(self.on_hit(world, self, b, hx, hy))
+                            if not done:
+                                b.take(world, self.damage + self.splash_center, self.owner)
+                                spark(world, hx, hy, self.z, (120, 200, 255))
                             return
             self.x, self.y = nx, ny
             if self.team == TEAM_PLAYER:
@@ -798,8 +852,13 @@ class Barrier:
 
 # ============================ effects ========================================
 class Effect:
-    """World-updated object (heal field, pulse bomb, quake wave ...). Capped at 24."""
+    """World-updated object (heal field, pulse bomb, quake wave ...). Capped at 24.
+
+    minimap_ring: None, or (x, y, r, color) in map cells; the HUD draws it on the minimap each frame
+    (spec 6.3: the Heal Field ring). Set it as an attribute and keep it current (None hides it).
+    """
     alive = True
+    minimap_ring = None
 
     def update(self, world, dt):
         pass

@@ -91,51 +91,139 @@ def check_static(h):
 IMPORT_TIERS = [('config',), ('theme',), ('core',), ('world',), ('combat',), ('render',), ('hero_base',),
                 ('hero_vector', 'hero_flicker', 'hero_rampart', 'enemies', 'waves'),
                 ('hud', 'screens', 'stats', 'potg', 'sfx'), ('app',)]
+# A tier whose files all have ONE owner (7.1) may import inside itself: HUD_UX owns hud, screens, stats,
+# potg and sfx, so e.g. screens -> sfx (mute state, 'ui' sounds) and hud -> stats/sfx/potg are fine.
+# Module-level imports inside the group must stay acyclic (checked below). The hero_* / enemies / waves
+# tier has several owners (and 7.2 has waves spawn by kind string), so its files never import each other.
+SAME_OWNER_GROUPS = (frozenset(('hud', 'screens', 'stats', 'potg', 'sfx')),)
+_TIER = {m: i for i, grp in enumerate(IMPORT_TIERS) for m in grp}
 
 
-def check_import_rules(h):
-    """7.2: an rwf module imports only modules to its left; world never imports combat at module level."""
-    tier = {m: i for i, grp in enumerate(IMPORT_TIERS) for m in grp}
-    rwf = os.path.join(GAME, 'rwf')
-    problems = []
-    for f in sorted(os.listdir(rwf)):
-        if not f.endswith('.py') or f == '__init__.py':
-            continue
-        me = f[:-3]
-        if me not in tier:
-            problems.append('rwf/%s is not in the 7.1 file list' % f)
-            continue
-        tree = ast.parse(open(os.path.join(rwf, f), encoding='ascii').read())
-        for node in tree.body:
-            mods = []
-            if isinstance(node, ast.ImportFrom) and node.level == 1:
+def import_allowed(me, m):
+    """True when rwf module `me` may import rwf module `m` (7.2 direction rule + same-owner groups)."""
+    if m not in _TIER or me not in _TIER:
+        return True
+    if _TIER[m] < _TIER[me]:
+        return True
+    return m != me and any(me in g and m in g for g in SAME_OWNER_GROUPS)
+
+
+def _rwf_imports(tree):
+    """[(module, lineno, module_level)] for every rwf import anywhere in the file (functions included)."""
+    nested = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            for sub in ast.walk(node):
+                if sub is not node:
+                    nested.add(id(sub))
+    out = []
+    for node in ast.walk(tree):
+        mods = []
+        if isinstance(node, ast.ImportFrom):
+            if node.level == 1:
                 if node.module:
                     mods.append(node.module.split('.')[0])
                 else:
                     mods += [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('rwf'):
-                mods.append(node.module.split('.')[1] if '.' in node.module else '')
-            for m in mods:
-                if m in tier and tier[m] >= tier[me]:
-                    problems.append('rwf/%s imports %s (not to its left)' % (f, m))
+            elif node.level == 0 and node.module and node.module.split('.')[0] == 'rwf':
+                parts = node.module.split('.')
+                if len(parts) > 1:
+                    mods.append(parts[1])
+                else:
+                    mods += [a.name for a in node.names]
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                parts = a.name.split('.')
+                if parts[0] == 'rwf' and len(parts) > 1:
+                    mods.append(parts[1])
+        for m in mods:
+            out.append((m, node.lineno, id(node) not in nested))
+    return out
+
+
+def check_import_rules(h):
+    """7.2: an rwf module imports only modules to its left (anywhere in the file, functions included),
+    except inside a same-owner group; module-level rwf imports have no cycles."""
+    rwf = os.path.join(GAME, 'rwf')
+    problems = []
+    graph = {}
+    for f in sorted(os.listdir(rwf)):
+        if not f.endswith('.py') or f == '__init__.py':
+            continue
+        me = f[:-3]
+        if me not in _TIER:
+            problems.append('rwf/%s is not in the 7.1 file list' % f)
+            continue
+        tree = ast.parse(open(os.path.join(rwf, f), encoding='ascii').read())
+        graph[me] = set()
+        for m, line, top in _rwf_imports(tree):
+            if m not in _TIER:
+                continue
+            if not import_allowed(me, m):
+                problems.append('rwf/%s:%d imports %s (not to its left)' % (f, line, m))
+            elif top and m != me:
+                graph[me].add(m)
+        for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name.split('.')[0] in ('numpy', 'threading', 'subprocess'):
                         problems.append('rwf/%s imports %s' % (f, a.name))
+    problems += ['import cycle: ' + c for c in _find_cycles(graph)]
+    # self-test of the rule table (5 lines, so a later edit of the table can't silently loosen it)
+    assert import_allowed('screens', 'sfx') and import_allowed('hud', 'stats') and import_allowed('hud', 'potg')
+    assert not import_allowed('hero_vector', 'hero_flicker') and not import_allowed('waves', 'enemies')
+    assert not import_allowed('enemies', 'hud') and not import_allowed('hud', 'app')
+    assert not import_allowed('world', 'combat') and import_allowed('render', 'combat')
+    assert _find_cycles({'hud': {'screens'}, 'screens': {'sfx'}, 'sfx': {'hud'}}), 'cycle finder'
     assert not problems, '; '.join(problems)
 
 
+def _find_cycles(graph):
+    """Module-level import cycles in {module: set(imported modules)}, as 'a -> b -> a' strings."""
+    out = []
+    state = {}
+
+    def visit(n, path):
+        state[n] = 1
+        for m in sorted(graph.get(n, ())):
+            if state.get(m) == 1:
+                out.append(' -> '.join(path[path.index(m):] + [m]))
+            elif m not in state:
+                visit(m, path + [m])
+        state[n] = 2
+    for n in sorted(graph):
+        if n not in state:
+            visit(n, [n])
+    return out
+
+
 def check_web_build_archive(h):
-    """Replaces 9.2 item 10: if a pygbag build exists, its game.apk ships main.py and every rwf/*.py."""
+    """Replaces 9.2 item 10: if a pygbag build exists, its game.apk ships main.py and every rwf/*.py.
+
+    A missing build or an apk whose files differ from the working tree (CRLF-normalised) is reported as
+    a WARN line, not a failure: builders are not expected to rebuild the web bundle after every edit.
+    The integrator rebuilds (python -m pygbag --build game) and looks for 'all match' here."""
     apk = os.path.join(GAME, 'build', 'web', 'game.apk')
     if not os.path.exists(apk):
-        return 'SKIP: run python -m pygbag --build game first'
-    names = set(zipfile.ZipFile(apk).namelist())
-    want = ['assets/main.py'] + ['assets/rwf/' + f for f in os.listdir(os.path.join(GAME, 'rwf'))
-                                 if f.endswith('.py')]
-    missing = [n for n in want if n not in names]
+        h.log('WARN: no web build at game/build/web/game.apk (run python -m pygbag --build game)')
+        return 'WARN: no build to inspect'
+    zf = zipfile.ZipFile(apk)
+    names = set(zf.namelist())
+    files = ['main.py'] + ['rwf/' + f for f in sorted(os.listdir(os.path.join(GAME, 'rwf'))) if f.endswith('.py')]
+    missing = ['assets/' + f for f in files if 'assets/' + f not in names]
     assert not missing, 'game.apk is missing %s (stale build?)' % missing[:5]
-    return '%d files in apk' % len(names)
+    stale = []
+    for f in files:
+        packed = zf.read('assets/' + f).replace(b'\r\n', b'\n')
+        with open(os.path.join(GAME, f), 'rb') as fh:
+            local = fh.read().replace(b'\r\n', b'\n')
+        if packed != local:
+            stale.append(f)
+    if stale:
+        h.log('WARN: game.apk is stale for %d file(s): %s (rebuild with python -m pygbag --build game)'
+              % (len(stale), ', '.join(stale[:6])))
+        return 'WARN: %d of %d files stale' % (len(stale), len(files))
+    return '%d files in apk, all %d game files match the working tree' % (len(names), len(files))
 
 
 def check_pool_math(h):
@@ -632,6 +720,104 @@ def check_intermission_swap_and_endmatch(h):
     assert 'END_BANNER' in r.states and 'SUMMARY' in r.states, 'X on the pause screen should end the match'
     r = h.run('vector', 30, timeline=[('tap', 5, 'hero2')], name='no_swap_midwave')
     assert r.world.player.KEY == 'vector', 'swapped outside the intermission'
+
+
+def check_countdown_blocks_combat(h):
+    """6.1: COUNTDOWN allows move and look only; combat input (the pointer-lock click included) is dropped."""
+    tl = [('hold', 5, 'fire', 20), ('tap', 30, 'alt'), ('tap', 35, 'ab1'), ('tap', 40, 'ab2'), ('tap', 45, 'ult'),
+          ('tap', 50, 'melee'), ('tap', 55, 'reload'), ('hold', 10, 'fwd', 30), ('tap', 110, 'fire')]
+    rec = {}
+
+    def on_frame(w, i, st):
+        if st == 'PLAYING' and 'play' not in rec:
+            rec['play'] = i
+        if i == 60:
+            rec['x60'] = w.player.x
+            rec['ammo60'] = w.player.ammo
+    r = h.run('vector', 130, timeline=tl, debug={'skip_countdown': False}, on_frame=on_frame, name='countdown_input')
+    start = rec.get('play')
+    assert start is not None and start >= 85, 'COUNTDOWN did not last 3 s (PLAYING at frame %r)' % start
+    early = [(f, n, d.get('slot')) for f, n, d in r.events
+             if f < start and n in ('shot', 'ability_used', 'ult_used')]
+    assert not early, 'combat during COUNTDOWN: %r' % early[:4]
+    assert rec['ammo60'] == r.world.player.MAX_AMMO, 'ammo spent during COUNTDOWN (%r)' % rec['ammo60']
+    assert rec['x60'] > 2.5 + 0.5, 'move not allowed during COUNTDOWN (x %.2f)' % rec['x60']
+    assert r.count('shot') >= 1, 'fire after the countdown did nothing'
+    return 'PLAYING from frame %d, first shot at frame %d' % (start, r.frames_of('shot')[0])
+
+
+def check_review_fixes(h):
+    """Phase 0 review fixes: dead owner drops its barrier; on_hit sees the Barrier; allow_crit=False;
+    cap eviction kills the bolt; isinstance(x, pygame.Surface) under the harness; SETTINGS['sens']."""
+    import pygame
+    from rwf import combat, core
+    from rwf.config import TEAM_ENEMY, TEAM_PLAYER, CAP_PROJECTILES
+    w = h.make_world()
+    inp = core.InputState()
+    # 1. an enemy removed silently (no on_death) leaves no barrier behind
+    e = h.spawn(w, 'dummy', 4.0)
+    b = combat.Barrier(TEAM_ENEMY, 400, 1.0, owner=e)
+    b.set_pose(e.x - 0.9, e.y, math.pi)
+    assert w.add_barrier(b)
+    e.remove_silently(w)
+    w.update(1 / 30, inp)
+    assert b not in w.barriers, 'barrier outlived its dead owner'
+    assert combat.hitscan(w, w.player, 0.0, 0).kind != 'barrier'
+    # 2. Projectile.on_hit gets the Barrier; returning True skips the default barrier damage
+    b2 = combat.Barrier(TEAM_ENEMY, 400, 1.0)
+    b2.set_pose(w.player.x + 2.0, w.player.y, math.pi)
+    w.add_barrier(b2)
+    seen = []
+
+    def on_hit(world, pr, target, x, y):
+        seen.append(target)
+        return True
+    pr = combat.Projectile(w.player.x + 0.3, w.player.y, 0.0, 16.0, team=TEAM_PLAYER, damage=40, owner=w.player,
+                           splash_r=1.5, splash_center=80, splash_edge=40, on_hit=on_hit)
+    for _ in range(10):
+        if pr.alive:
+            pr.update(w, 1 / 30)
+    assert seen and seen[0] is b2 and isinstance(seen[0], combat.Barrier) and b2.hp == 400, \
+        'on_hit barrier target %r, hp %r' % (seen[:1], b2.hp)
+    pr = combat.Projectile(w.player.x + 0.3, w.player.y, 0.0, 16.0, team=TEAM_PLAYER, damage=40, owner=w.player,
+                           splash_r=1.5, splash_center=80, splash_edge=40)
+    for _ in range(10):
+        if pr.alive:
+            pr.update(w, 1 / 30)
+    assert abs(b2.hp - (400 - 120)) < 1e-6, 'default barrier impact takes direct + splash_center (%r)' % b2.hp
+    w.remove_barrier(b2)
+    # 3. fire_hitscan(allow_crit=False): the head band does not crit
+    d = h.spawn(w, 'dummy', 5.0)
+    d.pool = combat.HealthPool(1000)
+    p = w.player
+    p.pitch = 20
+    hit = p.fire_hitscan(w, 19.0, allow_crit=False, used_slot=None)
+    assert hit.kind == 'enemy' and not hit.crit and abs(1000 - d.pool.health - 19.0) < 1e-6, \
+        'allow_crit=False: %r, dealt %.1f' % (hit, 1000 - d.pool.health)
+    hit = p.fire_hitscan(w, 19.0)
+    assert hit.crit and abs(1000 - d.pool.health - 19.0 - 38.0) < 1e-6, 'crit by default'
+    p.pitch = 0
+    # 4. eviction at the projectile cap marks the evicted bolt dead
+    w2 = h.make_world()
+    bolts = [combat.Projectile(10, 7.5, math.pi, 1, team=TEAM_ENEMY, damage=1) for _ in range(CAP_PROJECTILES)]
+    for q in bolts:
+        w2.add_projectile(q)
+    assert w2.add_projectile(combat.Projectile(3, 7.5, 0, 1, team=TEAM_PLAYER, damage=1))
+    assert not bolts[0].alive and bolts[1].alive, 'evicted bolt still alive'
+    # 5. surfaces keep their type under the harness, counting or not
+    for on in (False, True):
+        h.count_surfaces(on)
+        try:
+            for s in (core.text('A', 's'), pygame.transform.scale(pygame.Surface((4, 4)), (8, 8)),
+                      pygame.Surface((300, 300)), pygame.Surface((2, 2)).copy()):
+                assert isinstance(s, pygame.Surface), 'isinstance(%r, pygame.Surface) is False (counting %s)' % (s, on)
+        finally:
+            h.count_surfaces(False)
+    # 6. sensitivity is readable without an InputState
+    old = core.SETTINGS['sens']
+    inp.sens = 1.7
+    assert core.SETTINGS['sens'] == 1.7 and core.InputState().sens == 1.7
+    inp.sens = old
 
 
 def check_hero_contracts(h):

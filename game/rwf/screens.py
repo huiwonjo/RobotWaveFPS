@@ -3,12 +3,16 @@
 Plain-text versions of every Screen class with the final constructors and
 action strings: 'start' | 'lock:<key>' | 'done' | 'resume' | 'end_match' |
 'swap:<key>' | 'skip' | 'again' | 'select'. Static layers are cached.
+Session settings for the pause panel: sfx.muted and core.SETTINGS['sens']. Screens have no
+world bus, so 'ui' sounds are sfx.play('ui') directly (hud/screens/stats/potg/sfx may import
+each other, see tools/checks/check_foundation.py SAME_OWNER_GROUPS).
 """
 import pygame
 
 from . import config as C
 from . import core
 from . import render
+from . import sfx
 from . import theme
 
 W, H = C.W, C.H
@@ -194,10 +198,12 @@ class PauseOverlay(Screen):
         _center(surf, 'PAUSED', 150, 'xl')
         _center(surf, 'CLICK TO RESUME', 240, 'm')
         _center(surf, 'X - END MATCH', 276, 's')
-        _center(surf, 'M - MUTE', 302, 's')
-        _center(surf, '[ ] - SENS', 328, 's')
+        _center(surf, 'M - MUTE (%s)' % ('ON' if sfx.muted else 'OFF'), 302, 's')
+        _center(surf, '[ ] - SENS %.1fx' % core.SETTINGS['sens'], 328, 's')
         st = self.stats
-        _center(surf, 'ELIMS %d   DAMAGE %d   TIME %ds' % (st.elims, st.damage, st.time_played), 380, 's')
+        acc = 100.0 * st.hits / st.shots if st.shots else 0.0
+        _center(surf, 'ELIMS %d   DAMAGE %d   ACCURACY %d%%   TIME %ds' % (st.elims, st.damage, acc,
+                                                                        st.time_played), 380, 's')
         cls = type(self.world.player)
         for j, row in enumerate(cls.KIT[:5]):
             _center(surf, '%s  %s' % (row[0], row[1]), 430 + j * 26, 'xs', (200, 205, 220))

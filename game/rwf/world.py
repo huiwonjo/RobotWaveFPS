@@ -477,6 +477,7 @@ class World:
                 return False
             for i, q in enumerate(projs):
                 if q.team == C.TEAM_ENEMY:
+                    q.alive = False             # it may still be in the projectile loop's copy
                     del projs[i]
                     break
             else:
@@ -602,10 +603,21 @@ class World:
                     ef.update(self, dt)
             self.effects = [ef for ef in self.effects if ef.alive]
 
-        # 9. barriers: drop inactive ones whose owner is gone
+        # 9. barriers: drop ownerless ones once inactive, and every barrier whose owner is gone (dead or
+        #    dying, or a hero that is no longer the player), active or not. Enemy.remove_silently never
+        #    calls on_death, so this is what clears an Eradicator's barrier after a silent removal.
         if self.barriers:
-            self.barriers = [b for b in self.barriers
-                             if b.active or (b.owner is not None and getattr(b.owner, 'alive', False))]
+            keep = []
+            me = self.player
+            for b in self.barriers:
+                o = b.owner
+                if o is None:
+                    if b.active:
+                        keep.append(b)
+                elif getattr(o, 'alive', True) and not (o is not me and hasattr(o, 'ult_active_left')):
+                    keep.append(b)
+            if len(keep) != len(self.barriers):
+                self.barriers = keep
 
         # 10. packs
         for pk in self.packs:

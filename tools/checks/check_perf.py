@@ -82,3 +82,47 @@ def check_perf(h):
     assert vis >= 5, 'only %d dummies visible in the perf view' % vis
     return 'total p50 %.2f p95 %.2f ms, big surfaces %d, visible %d' % (
         _pct(samples['total'], 0.5), p95, st.get('big', 0), vis)
+
+
+def check_perf_close(h):
+    """Melee-range case: 6 dummies weaving 0.6-1.6 cells in front of the player. Their sprites are
+    taller than the screen and change size every frame, so every frame re-scales them (the scaled-sprite
+    cache can't help): the worst case for render. Same thresholds as check_perf."""
+    samples = {'update': [], 'render': [], 'hud': [], 'total': []}
+    st = {'tall': 0}
+    lat = (-0.45, 0.45, -0.15, 0.15, 0.0, 0.3)
+
+    def setup(w):
+        h.place(w, *h.ROOMY)
+        for k in range(6):
+            h.spawn(w, 'dummy', 1.0 + 0.1 * k, lat[k])
+
+    def on_frame(w, i, state):
+        p = w.player
+        ca, sa = math.cos(p.angle), math.sin(p.angle)
+        for k, e in enumerate(w.enemies):
+            d = 0.9 + 0.1 * k + 0.35 * math.sin(i * 0.23 + k * 1.3)
+            s = lat[k]
+            e.x = p.x + ca * d - sa * s
+            e.y = p.y + sa * d + ca * s
+        if i >= WARMUP:
+            for k in samples:
+                samples[k].append(w.perf.get(k, 0.0))
+            st['tall'] = max(st['tall'], sum(1 for b in w.projection.values() if b.visible and b.y1 - b.y0 > 768))
+        if i == WARMUP + MEASURED - 1:
+            return 'stop'
+        return None
+
+    h.run('vector', WARMUP + MEASURED + 5, debug={'perf': True}, setup=setup, on_frame=on_frame, name='perf_close',
+          shots=(WARMUP + 10,))
+    assert len(samples['total']) >= MEASURED - 1, 'only %d measured frames' % len(samples['total'])
+    line = '; '.join('%s p50 %.2f p95 %.2f' % (k, _pct(samples[k], 0.5), _pct(samples[k], 0.95))
+                     for k in ('update', 'render', 'hud', 'total')) + ' ms'
+    h.log(line)
+    p95 = _pct(samples['total'], 0.95)
+    assert p95 <= FAIL_MS, 'close range: p95 total %.2f ms > %.1f ms (%s)' % (p95, FAIL_MS, line)
+    if p95 > WARN_MS:
+        h.log('WARN: close range p95 total %.2f ms above the %.1f ms target' % (p95, WARN_MS))
+    assert st['tall'] >= 2, 'close-range scenario lost its taller-than-screen sprites (%d)' % st['tall']
+    return 'total p50 %.2f p95 %.2f ms, up to %d taller-than-screen sprites' % (
+        _pct(samples['total'], 0.5), p95, st['tall'])

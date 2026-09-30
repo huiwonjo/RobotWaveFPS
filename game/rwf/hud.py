@@ -68,6 +68,14 @@ class HUD:
         for pk in world.packs:
             if pk.active:
                 circle(surf, (60, 220, 90), (ox + int(pk.x * c), oy + int(pk.y * c)), 2)
+        ob = world.director.objective
+        if ob is not None:
+            circle(surf, (235, 241, 237), (ox + int(ob.x * c), oy + int(ob.y * c)), max(2, int(ob.radius * c)), 1)
+        for ef in world.effects:
+            ring = getattr(ef, 'minimap_ring', None)     # (x, y, r, color) or None; 6.3 Heal Field ring
+            if ring:
+                rx, ry, rr, rcol = ring
+                circle(surf, rcol, (ox + int(rx * c), oy + int(ry * c)), max(2, int(rr * c)), 1)
         for e in world.enemies:
             if not e.alive:
                 continue
