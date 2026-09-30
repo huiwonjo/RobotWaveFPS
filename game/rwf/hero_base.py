@@ -160,6 +160,7 @@ class Hero(Entity):
         self.ammo = self.MAX_AMMO
         self.reloading = False
         self.reload_left = 0.0
+        self._reload_frame = -1     # world.frame the reload started in (that frame's dt doesn't count)
         self.ult_charge = 0.0
         self.ult_active_left = 0.0
         self.move_fwd = 0
@@ -216,9 +217,9 @@ class Hero(Entity):
     def update(self, world, dt):
         for ab in self.abilities.values():
             ab.update(world, dt)
-        if self.reloading:
+        if self.reloading and world.frame != self._reload_frame:
             self.reload_left -= dt
-            if self.reload_left <= 0.0:
+            if self.reload_left <= 1e-9:            # float sums: 30 x (1/30) must finish a 1.0 s reload
                 self.reloading = False
                 self.reload_left = 0.0
                 self.ammo = self.MAX_AMMO
@@ -314,6 +315,9 @@ class Hero(Entity):
             return
         self.reloading = True
         self.reload_left = self.RELOAD_TIME
+        # started during this frame's input: RELOAD_TIME counts from the next frame, so a 1.0 s reload at
+        # 30 fps takes 30 frames (not 29, which it did when the start frame's dt was counted too)
+        self._reload_frame = world.frame
 
     def cancel_reload(self):
         self.reloading = False

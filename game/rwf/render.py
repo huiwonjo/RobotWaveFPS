@@ -524,6 +524,35 @@ def _upscale(small, surf, st):
     surf.blit(big, (0, 0))
 
 
+BARRIER_FLASH = 0.08        # s after a hit: the *_hit look
+BARRIER_LOW = 0.30          # hp fraction below which the *_low look is used
+BARRIER_NEAR = 1.2          # cells: a barrier this close to the camera fades (it would flood the screen)
+
+
+def _barrier_look(b, now, cx, cy):
+    """(fill, edge) for a world barrier: hit flash, low-HP tint, and a fade near the camera."""
+    c = b.color_add
+    if now - b.last_hit < BARRIER_FLASH:
+        col = b.color_hit or (min(255, c[0] * 2 + 20), min(255, c[1] * 2 + 20), min(255, c[2] * 2 + 20))
+        edge = b.edge_hit or (255, 245, 230)
+    elif b.max_hp > 0 and b.hp < BARRIER_LOW * b.max_hp:
+        col = b.color_low or (max(70, c[0]), c[1] // 4, c[2] // 4)
+        edge = b.edge_low or (255, 80, 60)
+    else:
+        col = c
+        edge = b.edge
+    sx = b.x2 - b.x1
+    sy = b.y2 - b.y1
+    ll = sx * sx + sy * sy
+    t = ((cx - b.x1) * sx + (cy - b.y1) * sy) / ll if ll > 1e-9 else 0.0
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    dist = math.hypot(b.x1 + sx * t - cx, b.y1 + sy * t - cy)
+    if dist < BARRIER_NEAR:
+        k = max(0.25, dist / BARRIER_NEAR)
+        col = (int(col[0] * k), int(col[1] * k), int(col[2] * k))
+    return col, edge
+
+
 def build_scene(world):
     cam = world.cam
     sc = Scene((cam.x, cam.y, cam.angle, cam.pitch), world.now)
@@ -540,7 +569,8 @@ def build_scene(world):
             sc.orb(pr.x, pr.y, pr.z, pr.size, pr.color, pr.core)
     for b in world.barriers:
         if b.active and not b.owner_view_only:
-            sc.segment(b.x1, b.y1, b.x2, b.y2, b.color_add)
+            col, edge = _barrier_look(b, sc.now, cam.x, cam.y)
+            sc.segment(b.x1, b.y1, b.x2, b.y2, col, z0=0.0, z1=getattr(b, 'z1', 0.9), edge=edge)
     for ef in world.effects:
         ef.emit_visuals(sc)
     world.director.emit_visuals(sc)

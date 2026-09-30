@@ -600,7 +600,7 @@ class Rampart(Hero):
     def _impact(self, world, x, y):
         world.shake(*T['charge_impact_shake'])
         world.burst(x, y, 0.45, T['charge_impact_particles'], (255, 200, 120), 3.0, 0.5, 2)
-        world.bus.emit('sfx', name='hammer', vol=1.0)
+        world.bus.emit('sfx', name='hammer', vol=1.0, variant='low')     # sfx.py plays 'hammer_low'
 
     # --- ult ------------------------------------------------------------------------------------
     def on_ult(self, world):

@@ -21,8 +21,8 @@ Presentation: each painter is registered with an aspect-correct base size (the r
 sprite to width/height x 1.27 on screen, so e.g. a trooper is 76x96, not 48x96), draws at most ~12
 primitives, keeps the head/core inside the kind's crit band, and adds cyan trim for elites.
 When theme.enemy_image() returns a Surface (a PNG theme), it is fitted to the base rect and given state
-overlays instead. Floor telegraphs (detonator blast radius, warden stomp ring) and the Eradicator's
-barrier are emitted from emit_visuals.
+overlays instead. Floor telegraphs (detonator blast radius, warden stomp ring) are emitted from
+emit_visuals; the Eradicator's barrier is a plain Barrier with its own colours, drawn by the renderer.
 """
 import math
 
@@ -31,7 +31,7 @@ import pygame
 from . import config as C
 from . import core
 from . import theme
-from .combat import Barrier, Effect, Enemy, Projectile, enemy_hits_player, knockback, splash
+from .combat import Barrier, Effect, Enemy, enemy_hits_player, knockback, player_barrier_between, splash
 from .config import TEAM_ENEMY, TEAM_PLAYER
 from .render import register_painter
 from .world import OPEN_CELLS, is_wall
@@ -86,13 +86,8 @@ def _hypot(ax, ay, bx, by):
 
 def _crosses_player_barrier(world, ax, ay, bx, by):
     """t along a->b where an active player-team barrier crosses it, or None."""
-    best = None
-    for b in world.barriers:
-        if b.active and b.team == TEAM_PLAYER:
-            t = b.intersects(ax, ay, bx, by)
-            if t is not None and (best is None or t < best):
-                best = t
-    return best
+    hit = player_barrier_between(world, ax, ay, bx, by)
+    return None if hit is None else hit[0]
 
 
 # ============================ small world effects ============================
@@ -253,19 +248,10 @@ class _Robot(Enemy):
         return False
 
     def shoot(self, world, angle, spec, ability='bolt'):
-        """One enemy bolt (4.5): like Enemy.fire_bolt, with its own colour/core/size and ability tag."""
+        """One enemy bolt (4.5) from a TUNING bolt spec, through Enemy.fire_bolt (which scales damage)."""
         speed, radius, dmg, ttl, color, core_col, size = spec
-        off = self.radius + 0.05
-        sx = self.x + math.cos(angle) * off
-        sy = self.y + math.sin(angle) * off
-        if is_wall(sx, sy):
-            sx, sy = self.x, self.y
-        pr = Projectile(sx, sy, angle, speed, team=TEAM_ENEMY, damage=dmg * self.dmg_mult, radius=radius,
-                        owner=self, ability=ability, ttl=ttl, z=0.45, color=color, core=core_col, size=size)
-        ok = world.add_projectile(pr)
-        if ok:
-            world.bus.emit('sfx', name='enemy_shot', vol=0.6)
-        return ok
+        return self.fire_bolt(world, angle, speed, dmg, radius, color, ttl, ability=ability, core=core_col,
+                              size=size)
 
     def aim(self, world, jitter_deg):
         return self.face_player(world) + world.rng.uniform(-jitter_deg, jitter_deg) * _D2R
@@ -569,13 +555,6 @@ class Detonator(_Robot):
 
 
 # ============================ ERADICATOR =====================================
-class _EnemyBarrier(Barrier):
-    """The Eradicator's shield. owner_view_only makes the renderer skip its default blue segment: the
-    Eradicator draws it itself (red-orange with a hit flash and a low-HP tint) in emit_visuals. Gameplay is
-    the plain Barrier's."""
-    owner_view_only = True
-
-
 @core.register_enemy
 class Eradicator(_Robot):
     """Barrier tank: holds 5-7 cells and strafes, turns at 90 deg/s, deploys a 400-HP barrier for 8 s
@@ -596,8 +575,11 @@ class Eradicator(_Robot):
         super().__init__(world, x, y, elite)
         rng = world.rng
         self.mode = 'move'
-        self.barrier = _EnemyBarrier(TEAM_ENEMY, T['erad_barrier_hp'] * self.pool_mult, T['erad_barrier_half'],
-                                     owner=self, color_add=(80, 30, 18))
+        # red-orange, with a hit flash and a low-HP tint (the renderer draws it: render._barrier_look)
+        self.barrier = Barrier(TEAM_ENEMY, T['erad_barrier_hp'] * self.pool_mult, T['erad_barrier_half'],
+                               owner=self, color_add=(80, 30, 18), edge=(255, 140, 70),
+                               color_hit=(150, 70, 40), edge_hit=(255, 240, 200),
+                               color_low=(90, 14, 10), edge_low=(255, 70, 50), z1=0.95)
         self.bar_state = 'ready'            # 'ready' | 'up' | 'cooldown'
         self._bar_until = 0.0
         self._side = 1 if rng.random() < 0.5 else -1
@@ -706,28 +688,6 @@ class Eradicator(_Robot):
         super().on_death(world, source, ability)
         world.remove_barrier(self.barrier)
         self.barrier.active = False
-
-    def emit_visuals(self, scene):
-        super().emit_visuals(scene)
-        b = self.barrier
-        if self.alive and self.bar_state == 'up' and b.active:
-            frac = b.hp / b.max_hp if b.max_hp > 0 else 0.0
-            if scene.now - b.last_hit < 0.08:
-                col, edge = (150, 70, 40), (255, 240, 200)
-            elif frac < 0.3:
-                col, edge = (90, 14, 10), (255, 70, 50)
-            else:
-                col, edge = (80, 30, 18), (255, 140, 70)
-            # a barrier brushing past the camera would tint the whole screen: fade it within 1.2 cells
-            cx, cy = scene.cam[0], scene.cam[1]
-            sx, sy = b.x2 - b.x1, b.y2 - b.y1
-            ll = sx * sx + sy * sy
-            t = core.clamp(((cx - b.x1) * sx + (cy - b.y1) * sy) / ll, 0.0, 1.0) if ll > 1e-9 else 0.0
-            dist = math.hypot(b.x1 + sx * t - cx, b.y1 + sy * t - cy)
-            if dist < 1.2:
-                k = max(0.25, dist / 1.2)
-                col = (int(col[0] * k), int(col[1] * k), int(col[2] * k))
-            scene.segment(b.x1, b.y1, b.x2, b.y2, col, z0=0.0, z1=0.95, edge=edge)
 
 
 # ============================ WARDEN =========================================

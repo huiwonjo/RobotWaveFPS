@@ -113,8 +113,9 @@ def check_vector_rifle(h):
     assert st['reload_frames'], 'hold 4.0 s: no reload started'
     rf = st['reload_frames']
     assert shots == 30, 'no shot may fire during the reload (got %d shots)' % shots
-    # the reload starts in handle_input and ticks in the same frame: 45 ticks of 1/30 s = 1.5 s, the last of
-    # which clears `reloading` (so 44 frames end with reloading True; 45-46 allows for float rounding)
+    # the reload starts in handle_input and starts ticking on the next frame (integration: the start frame's
+    # dt no longer counts): 45 ticks of 1/30 s = 1.5 s, so 45 frames end with reloading True (44/46 allow
+    # for float rounding)
     assert rf[-1] - rf[0] + 1 in (44, 45, 46), 'reload lasted %d frames, want 1.5 s' % (rf[-1] - rf[0] + 1)
     assert st['ammo'][rf[-1] + 1] == 30, 'mag not refilled after the reload'
     return note + '; 4 s: %d shots, reload frames %d-%d' % (shots, rf[0], rf[-1])

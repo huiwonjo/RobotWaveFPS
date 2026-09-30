@@ -349,14 +349,19 @@ class Enemy(Entity):
             self.angle = math.atan2(uy, ux)
         return math.hypot(self.x - ox, self.y - oy)
 
-    def fire_bolt(self, world, angle, speed, damage, radius=0.12, color=(255, 70, 50), ttl=1.25):
+    def fire_bolt(self, world, angle, speed, damage, radius=0.12, color=(255, 70, 50), ttl=1.25, *,
+                  ability='bolt', core=(255, 255, 255), size=0.08, z=0.45):
+        """One enemy bolt from just in front of the body. `damage` is the stage-1 number (x dmg_mult here).
+        ability tags the bolt ('bolt', 'recon', 'sentry' ...: player_hurt / kill labels); core and size
+        are the orb's look."""
         off = self.radius + 0.05
         sx = self.x + math.cos(angle) * off
         sy = self.y + math.sin(angle) * off
         if is_wall(sx, sy):
             sx, sy = self.x, self.y
         p = Projectile(sx, sy, angle, speed, team=TEAM_ENEMY, damage=damage * self.dmg_mult,
-                       radius=radius, owner=self, ability='bolt', ttl=ttl, color=color)
+                       radius=radius, owner=self, ability=ability, ttl=ttl, z=z, color=color, core=core,
+                       size=size)
         ok = world.add_projectile(p)
         if ok:
             world.bus.emit('sfx', name='enemy_shot', vol=0.6)
@@ -536,16 +541,29 @@ def apply_damage(world, target, amount, source=None, *, ability='primary', crit=
     return dealt
 
 
+def player_barrier_between(world, ax, ay, bx, by):
+    """(t, barrier) for the nearest active player-team barrier crossing the segment a->b (t in [0, 1]
+    along it), or None. Enemy code uses it to tell "blocked by the barrier" apart from god mode (both make
+    enemy_hits_player return 0) and to stop motion at the barrier line (slicer lunge)."""
+    best = None
+    for b in world.barriers:
+        if b.active and b.team == TEAM_PLAYER:
+            t = b.intersects(ax, ay, bx, by)
+            if t is not None and (best is None or t < best[0]):
+                best = (t, b)
+    return best
+
+
 def enemy_hits_player(world, source, amount, from_xy, ability='melee'):
     """Melee / area damage from an enemy: an active player barrier across the path absorbs it."""
     p = world.player
     if from_xy is None:
         from_xy = (source.x, source.y) if source is not None else (p.x, p.y)
     fx, fy = from_xy
-    for b in world.barriers:
-        if b.active and b.team == TEAM_PLAYER and b.intersects(fx, fy, p.x, p.y) is not None:
-            b.take(world, amount, source)
-            return 0.0
+    blk = player_barrier_between(world, fx, fy, p.x, p.y)
+    if blk is not None:
+        blk[1].take(world, amount, source)
+        return 0.0
     return apply_damage(world, p, amount, source, ability=ability, from_xy=from_xy)
 
 
@@ -787,10 +805,16 @@ class Projectile:
 
 # ============================ barriers =======================================
 class Barrier:
-    """A world segment of hit points (spec 5.6). Pose it every frame with set_pose."""
+    """A world segment of hit points (spec 5.6). Pose it every frame with set_pose.
+
+    Look (render.build_scene draws every active barrier that is not owner_view_only): color_add is the
+    additive fill and edge the 1 px top/bottom lines; for 0.08 s after a hit the *_hit pair is used, and
+    below 30% hp the *_low pair (None = derived from color_add / edge by the renderer). z1 is the top.
+    """
     owner_view_only = False
 
-    def __init__(self, team, max_hp, half_width, owner=None, color_add=(20, 60, 120)):
+    def __init__(self, team, max_hp, half_width, owner=None, color_add=(20, 60, 120), edge=(120, 200, 255), *,
+                 color_hit=None, edge_hit=None, color_low=None, edge_low=None, z1=0.9):
         self.team = team
         self.max_hp = float(max_hp)
         self.hp = float(max_hp)
@@ -799,6 +823,12 @@ class Barrier:
         self.active = True
         self.last_hit = -9.0
         self.color_add = color_add
+        self.edge = edge
+        self.color_hit = color_hit
+        self.edge_hit = edge_hit
+        self.color_low = color_low
+        self.edge_low = edge_low
+        self.z1 = z1
         self.x1 = self.y1 = self.x2 = self.y2 = 0.0
         self.cx = self.cy = 0.0
         self.facing = 0.0

@@ -24,13 +24,6 @@ def _dmg(r, target, **match):
     return r.where('damage', target=lambda t, e=target: t is e, **match)
 
 
-def _spawn_at(h, w, x, y, **attrs):
-    """Spawn a dummy at an absolute spot (even behind a wall) with only the Harness API: stand there,
-    spawn at distance 0, and let the caller h.place() the player back."""
-    h.place(w, x, y, 0.0)
-    return h.spawn(w, 'dummy', 0.0, **attrs)
-
-
 # ============================ 1. generic contract ============================
 def check_contract(h):
     """9.3 step 1: every slot emits ability_used, alt raises the barrier, damage, ult, draws."""
@@ -393,7 +386,7 @@ def check_flame_strike(h):
     sw = {}
 
     def su(w):
-        sw['d'] = _spawn_at(h, w, 9.5, 5.5, pool=_pool())
+        sw['d'] = h.spawn_at(w, 'dummy', 9.5, 5.5, pool=_pool())
         h.place(w, 9.5, 12.5, NORTH)
 
     def of(w, i, state):
@@ -413,7 +406,7 @@ def check_quake(h):
     home = (10.0, 12.6, NORTH)
 
     def setup(w):
-        st['walled'] = _spawn_at(h, w, 10.5, 5.5, pool=_pool())
+        st['walled'] = h.spawn_at(w, 'dummy', 10.5, 5.5, pool=_pool())
         h.place(w, *home)
         st['in'] = [h.spawn(w, 'dummy', 2.0, 0.0, pool=_pool()),       # (10.0, 10.6)
                     h.spawn(w, 'dummy', 3.5, -1.2, pool=_pool()),      # (8.8, 9.1), 18.9 deg

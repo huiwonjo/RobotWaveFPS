@@ -31,6 +31,7 @@ THROTTLE = {
     'hit': 0.05, 'shot_rifle': 0.04, 'shot_pistol': 0.04, 'enemy_shot': 0.08, 'beep': 0.10,
     'crit': 0.04, 'hurt': 0.07, 'barrier_hit': 0.06, 'explosion': 0.05, 'capture': 0.9,
     'rocket': 0.10, 'blink': 0.08, 'hammer': 0.08, 'melee': 0.10, 'ability_ready': 0.10, 'ui': 0.04,
+    'hammer_low': 0.10, 'rewind': 0.20, 'heal': 0.30,
 }
 
 enabled = False
@@ -146,6 +147,10 @@ def _r_hammer(sr):
     return _mix(_shaped_noise(sr, 0.12, 0.08, 0.05, 1.2), _tone(sr, 0.12, 95, 60, decay=0.06, gain=0.7))
 
 
+def _r_hammer_low(sr):
+    return _mix(_shaped_noise(sr, 0.2, 0.05, 0.08, 1.3), _tone(sr, 0.2, 70, 38, decay=0.1, gain=0.9))
+
+
 def _r_melee(sr):
     return _mix(_shaped_noise(sr, 0.08, 0.15, 0.03, 1.0), _tone(sr, 0.08, 140, 80, decay=0.04, gain=0.6))
 
@@ -199,6 +204,10 @@ def _r_rewind(sr):
     return _mix(_tone(sr, 0.3, 1400, 300, decay=0.2, gain=0.5), _tone(sr, 0.3, 700, 150, decay=0.2, gain=0.3))
 
 
+def _r_heal(sr):
+    return _mix(_tone(sr, 0.25, 520, 780, decay=0.12, gain=0.5), _tone(sr, 0.25, 1040, 1560, decay=0.08, gain=0.15))
+
+
 def _r_rocket(sr):
     return _mix(_shaped_noise(sr, 0.2, 0.2, 0.08, 0.8), _tone(sr, 0.2, 220, 330, decay=0.08, gain=0.4))
 
@@ -233,11 +242,12 @@ RECIPES = {
     'ult': _r_ult, 'ability_ready': _r_ability_ready, 'explosion': _r_explosion, 'barrier_hit': _r_barrier_hit,
     'enemy_shot': _r_enemy_shot, 'blink': _r_blink, 'rewind': _r_rewind, 'rocket': _r_rocket, 'beep': _r_beep,
     'warn': _r_warn, 'capture': _r_capture, 'ui': _r_ui, 'pickup': _r_pickup, 'wave': _r_wave,
+    'hammer_low': _r_hammer_low, 'heal': _r_heal,
 }
 # Synthesis order after init: the sounds heard most often first.
 ORDER = ('ui', 'shot_rifle', 'shot_pistol', 'hit', 'crit', 'elim', 'hurt', 'enemy_shot', 'hammer', 'blink',
          'explosion', 'ability_ready', 'ult_ready', 'ult', 'barrier_hit', 'rocket', 'beep', 'warn', 'melee',
-         'capture', 'pickup', 'wave', 'rewind')
+         'capture', 'pickup', 'wave', 'rewind', 'hammer_low', 'heal')
 
 
 def synth(name, sr=22050):
@@ -406,7 +416,17 @@ def _on_barrier_damage(d):
 
 
 def _on_sfx(d):
-    play(d.get('name', ''), d.get('vol', 1.0) or 1.0)
+    """'sfx' events. An optional 'variant' picks a variant sound when one exists: the variant's own
+    name (FLICKER Rewind sends name 'blink', variant 'rewind') or '<name>_<variant>' (RAMPART's charge
+    impact sends 'hammer' + 'low' -> 'hammer_low'); otherwise the plain name plays."""
+    name = d.get('name', '')
+    v = d.get('variant')
+    if v:
+        if v in RECIPES:
+            name = v
+        elif name + '_' + str(v) in RECIPES:
+            name = name + '_' + str(v)
+    play(name, d.get('vol', 1.0) or 1.0)
 
 
 def _on_objective(d):

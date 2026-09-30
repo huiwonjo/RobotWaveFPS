@@ -21,6 +21,8 @@ Harness API for check modules (spec 9.1, plus a few helpers):
     h.spawn(world, kind, fwd, side=0.0, **attrs) -> Enemy   (relative to the player's facing, side > 0
         to the right; slides forward then sideways from the player and stops at walls, so it never spawns
         inside one; a clamp of more than 0.05 prints a NOTE line through h.log)
+    h.spawn_at(world, kind, x, y, **attrs) -> Enemy   (absolute map position, e.g. behind a wall; raises
+        if (x, y) is inside a wall)
     h.place(world, x, y, angle=0.0, pitch=0.0)
     h.ROOMY = (9.5, 12.5, -pi/2)    h.place(w, *h.ROOMY) before spawning wide layouts (the default start
         is a 1-cell corridor); hero_contract() uses it
@@ -263,6 +265,22 @@ class Harness:
                      % (kind, fwd, side, p.x, p.y, x, y, wx, wy))
         e = world.spawn_enemy(kind, x, y)
         e.angle = math.atan2(p.y - y, p.x - x)
+        for k, v in attrs.items():
+            setattr(e, k, v)
+        return e
+
+    def spawn_at(self, world, kind, x, y, **attrs):
+        """Spawn at an absolute map position (e.g. behind a wall from the player), facing the player.
+        (x, y) must be open floor; it is not moved, so a spot inside a wall raises."""
+        from rwf import core
+        from rwf.world import is_wall
+        if kind not in core.ENEMY_TYPES:
+            raise ValueError('unknown enemy kind %r' % (kind,))
+        if is_wall(x, y):
+            raise ValueError('spawn_at(%s, %.2f, %.2f): inside a wall' % (kind, x, y))
+        p = world.player
+        e = world.spawn_enemy(kind, float(x), float(y))
+        e.angle = math.atan2(p.y - e.y, p.x - e.x)
         for k, v in attrs.items():
             setattr(e, k, v)
         return e
