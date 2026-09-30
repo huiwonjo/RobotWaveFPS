@@ -99,6 +99,21 @@ def main():
             def shot(name):
                 pg.screenshot(path='%s_%s.png' % (out, name))
 
+            def sample():
+                try:
+                    v = pg.evaluate('() => (window.RWF_PERF === undefined ? null : String(window.RWF_PERF))')
+                except Exception:
+                    v = None
+                if v and (not perf or perf[-1] != v):
+                    perf.append(v)
+
+            def nap(sec):
+                """sleep, sampling window.RWF_PERF (published while the debug overlay is on)"""
+                t_end = time.time() + sec
+                while time.time() < t_end:
+                    sample()
+                    time.sleep(min(0.25, max(0.0, t_end - time.time())))
+
             pg.goto('http://127.0.0.1:8765/index.html')
             t_end = time.time() + 90
             while time.time() < t_end:
@@ -135,41 +150,39 @@ def main():
             if ok:
                 pg.keyboard.press('0')          # debug overlay (FPS, ms per system)
                 pg.keyboard.down('w')
-                time.sleep(1.5)
+                nap(1.5)
                 pg.keyboard.up('w')
                 pg.mouse.down()
-                time.sleep(1.0)
+                nap(1.0)
                 pg.mouse.up()
-                time.sleep(2.0)
+                nap(2.0)
                 shot('4_play')
                 pg.mouse.move(700, 400)
                 pg.keyboard.down('d')
-                time.sleep(1.0)
+                nap(1.0)
                 pg.keyboard.up('d')
-                time.sleep(6.0)
+                nap(6.0)
                 shot('5_later')
                 if a.play > 0 and state() in ('PLAYING', 'INTERMISSION'):
                     # back toward the corner and keep turning while firing: enemies walk up to us
                     pg.keyboard.down('s')
-                    time.sleep(1.0)
+                    nap(1.0)
                     pg.keyboard.up('s')
                     t_end = time.time() + a.play
                     k = 0
                     pg.mouse.down()
                     while time.time() < t_end and state() in ('PLAYING', 'INTERMISSION'):
                         pg.mouse.move(640 + (60 if k % 2 else -60), 400)
-                        time.sleep(0.5)
+                        nap(0.5)
                         k += 1
-                        try:
-                            v = pg.evaluate('() => (window.RWF_PERF === undefined ? null : String(window.RWF_PERF))')
-                        except Exception:
-                            v = None
-                        if v and (not perf or perf[-1] != v):
-                            perf.append(v)
                         if k % 20 == 10:
                             shot('7_play_%02d' % (k // 20))
                     pg.mouse.up()
                     shot('8_played')
+                if a.play > 0 and state() in ('END_BANNER', 'POTG', 'SUMMARY'):
+                    wait('SUMMARY', 15, 'end screens')      # death -> END_BANNER -> POTG -> SUMMARY
+                    time.sleep(0.5)
+                    shot('9_summary')
                 if state() in ('PLAYING', 'INTERMISSION'):
                     pg.keyboard.press('Escape')     # pause (or pointer-lock loss -> auto-pause)
                     if wait('PAUSED', 5, 'pause'):

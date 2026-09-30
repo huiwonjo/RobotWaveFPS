@@ -1524,3 +1524,18 @@ Setup for every kind: `no_director`, `god`, the player at (2.5, 7.5) facing east
 5. Review the CORE REQUESTs.
 6. Merge any theme or presentation changes made to the old `main.py` by the concurrent session after FOUNDATION's snapshot.
 7. Don't deploy (copy to the repo root, commit or push) without the user's go-ahead.
+
+---
+
+## 10. Integration notes (appended by the integrator; details in design/INTEGRATION_REPORT.md)
+
+- Retuned with the 9.6 levers after the autoplay balance runs (`tools/autoplay.py`): `ULT_COST` +10% (VECTOR 1650,
+  FLICKER 1210, RAMPART 1540) and enemy damage to the player -15% (`enemies.TUNING['player_damage_scale'] = 0.85`;
+  enemy-on-enemy blasts unscaled). All other numbers in this file are unchanged.
+- Core additions from the CORE REQUESTs: `Barrier(edge=, color_hit=, edge_hit=, color_low=, edge_low=, z1=)` drawn by
+  the renderer with a hit flash / low-HP tint / near-camera fade; `Enemy.fire_bolt(..., ability=, core=, size=, z=)`;
+  `combat.player_barrier_between()`; `sfx` 'variant' field (`rewind`, `hammer_low`) plus a `heal` sound; reloads no
+  longer count the dt of the frame they start in; harness `h.spawn_at()`.
+- Open balance items that need a spec decision (not tunable with the allowed levers): ult charge is 1.5-3x faster
+  than the 9.6 targets because assault waves last 14-36 s instead of 30-60 s; Pulse Bomb / Quake damage feeds the next
+  ult; FLICKER is fragile and RAMPART dominant; capture waves resolve in about 14 s.
