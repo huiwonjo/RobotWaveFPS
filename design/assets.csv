@@ -1,0 +1,6 @@
+id,role,type,description,size/ratio,style line ref,source
+seoul-night,title and in-game skyline,background,Seoul night street with N Seoul Tower,16:9,seoul-dokkaebi,reference_media[0]
+dokkaebi-normal,normal enemy,sprite,compact brass jade dokkaebi,portrait,seoul-dokkaebi,reference_media[1]
+dokkaebi-elite,elite enemy,sprite,lean armored dokkaebi,portrait,seoul-dokkaebi,reference_media[2]; Higgsfield background remover
+dokkaebi-boss,boss enemy,sprite,heavy dokkaebi guardian,portrait,seoul-dokkaebi,reference_media[3]; Higgsfield background remover
+NotoSansKR,Korean UI text,font,Noto Sans KR OFL,variable,seoul-dokkaebi,Google Fonts

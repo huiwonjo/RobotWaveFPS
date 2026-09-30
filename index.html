@@ -1,4 +1,4 @@
-<html lang="en-us"><script src="https://pygame-web.github.io/cdn/0.9.3/pythons.js" type=module id="site" data-python="python3.12" data-LINES=42 data-COLUMNS=132 data-os="vtx,snd,gui" async defer>#<!--
+<html lang="ko"><meta charset="UTF-8"><script src="https://pygame-web.github.io/cdn/0.9.3/pythons.js" type=module id="site" data-python="python3.12" data-LINES=42 data-COLUMNS=132 data-os="vtx,snd,gui" async defer>#<!--
 
 print("""
 Loading Robot Wave FPS from game.apk
@@ -23,7 +23,7 @@ from pathlib import Path
 # do not rename
 async def custom_site():
     import embed
-    platform.document.body.style.background = "#7f7f7f"
+    platform.document.body.style.background = "#07121c"
 
     platform.window.transfer.hidden = true
     platform.window.canvas.style.visibility = "visible"
@@ -70,8 +70,9 @@ async def custom_site():
         __import__(__name__).__file__ = main
 
         # now make a prompt
-        msg  = "Ready to start ! Please click/touch page"
+        msg  = "준비 완료 · 아래 버튼을 눌러 서울의 밤에 입장하세요"
         platform.window.infobox.innerText = msg
+        platform.window.gameAwaitGesture()
         print("\n"*4, f"    * Waiting for media user engagement. {msg} *" , "\n"*4)
 
         while not platform.window.MM.UME:
@@ -152,13 +153,13 @@ config = {
     ume_block : 1,
     can_close : 0,
     archive : "game",
-    gui_debug : 2,
+    gui_debug : 0,
     cdn : "https://pygame-web.github.io/cdn/0.9.3/",
     autorun : 0,
     PYBUILD : "3.12",
-    fb_ar   :  1.77,
-    fb_width : "1280",
-    fb_height : "720"
+    fb_ar   :  1.333333,
+    fb_width : "1024",
+    fb_height : "768"
 }
 
 function show_infobox() {
@@ -178,7 +179,12 @@ function show_infobox() {
 
 </script>
 
-    <title>Robot Wave FPS</title>
+    <title>DOKKAEBI: NIGHTFALL — 서울 도깨비 야습</title>
+    <meta name="description" content="서울의 밤, 귀문이 열렸다. 도깨비의 습격을 막고 도시를 지키는 1인칭 웨이브 슈터.">
+    <meta name="theme-color" content="#07121c">
+    <meta property="og:title" content="DOKKAEBI: NIGHTFALL">
+    <meta property="og:description" content="익숙한 골목, 낯선 존재들. 서울의 밤을 되찾으세요.">
+    <meta property="og:image" content="game/assets/seoul-night.png">
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -187,7 +193,7 @@ function show_infobox() {
     <meta name="apple-mobile-web-app-capable" content="yes"/>
 
 
-    <link rel="icon" type="image/png" href="favicon.png" sizes="16x16">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
     <style>
         #status {
@@ -286,9 +292,17 @@ function show_infobox() {
 
     <script src="https://pygame-web.github.io/cdn/0.9.3//browserfs.min.js"></script>
 
+    <link rel="stylesheet" href="loader.css">
+    <script src="loader.js" defer></script>
 </head>
 
 <body>
+    <main id="boot-screen" aria-label="게임 불러오기">
+        <header class="boot-header"><span class="sigil" aria-hidden="true">夜</span><div>NIGHT WATCH DIVISION<small>SEOUL, REPUBLIC OF KOREA</small></div><span class="chapter">CHAPTER 01<br><b>종로의 밤</b></span></header>
+        <section class="boot-copy"><p class="eyebrow">서울, 귀문이 열리다</p><h1>DOKKAEBI<span>NIGHTFALL</span></h1><p class="intro">익숙한 골목, 낯선 존재들.<br>푸른 도깨비불을 쫓아 서울의 밤을 되찾으세요.</p><div id="boot-loading" aria-live="polite"></div><button id="boot-start" type="button" disabled>도시를 불러오는 중…</button><p class="boot-note">PC 키보드와 마우스로 플레이하세요.</p></section>
+        <aside class="boot-character" aria-hidden="true"><img src="game/assets/dokkaebi-normal.png" alt=""><span>001 / 청귀<br><b>THE FIRST WATCH</b></span></aside>
+        <footer class="boot-footer"><span>WASD 이동 <i>·</i> 마우스 조준 <i>·</i> 좌클릭 발사 <i>·</i> R 재장전</span><span>37.57° N / 126.98° E</span></footer>
+    </main>
 
     <div id="transfer" align=center>
 <!--        <div class="spinner" id='spinner'></div> -->

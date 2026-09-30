@@ -1,2 +1,4 @@
 game/build/
 __pycache__/
+qa/
+design/higgsfield-*-job.json
