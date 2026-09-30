@@ -72,6 +72,12 @@ def _runs(trace, frames, state):
     return out
 
 
+def _pds():
+    """The integration balance lever on enemy damage to the player (enemies.TUNING, spec 9.6 +-15%)."""
+    from rwf import enemies
+    return enemies.TUNING['player_damage_scale']
+
+
 def _kill(w, e, amount=100000.0):
     from rwf import combat
     return combat.apply_damage(w, e, amount, w.player, ability='primary')
@@ -92,12 +98,12 @@ def check_trooper(h):
     for f, pr in bolts:
         before = [ln for s, ln in wind if s <= f < s + ln]
         assert before and before[0] >= int(0.4 * FPS), 'bolt at frame %d without a 0.4 s windup (%r)' % (f, before)
-        assert pr.ability == 'bolt' and abs(pr.damage - 10.0) < 1e-6 and pr.radius == 0.12, \
+        assert pr.ability == 'bolt' and abs(pr.damage - 10.0 * _pds()) < 1e-6 and pr.radius == 0.12, \
             'trooper bolt damage %.1f radius %.2f' % (pr.damage, pr.radius)
     gaps = [b[0] - a[0] for a, b in zip(bolts, bolts[1:])]
     assert all(g >= int(2.0 * FPS) - 1 for g in gaps), 'fire cycle faster than 2.0 s: gaps %r' % gaps
     raw = [d['amount'] for d in r.where('player_hurt', ability='bolt')]
-    assert raw and all(abs(a - 10.0) < 1e-6 for a in raw), 'bolt damage %r' % raw[:4]
+    assert raw and all(abs(a - 10.0 * _pds()) < 1e-6 for a in raw), 'bolt damage %r' % raw[:4]
     assert 'attack' in {tr[i][0] for i in range(600)}, 'no attack state after firing'
     return 'bolts %d, first hurt at %.1f s, mean dist %.2f, windup runs %s' % (
         len(bolts), hurt[0] / FPS, mean, sorted({ln for _, ln in wind}))
@@ -121,7 +127,7 @@ def check_slicer(h):
     assert lunges[0][1] >= 2.0, 'first lunge displacement %.2f in 0.4 s (want >= 2.0)' % lunges[0][1]
     assert r.count('player_hurt') >= 1, 'the slicer never hurt the player'
     hits = r.where('player_hurt', ability='lunge')
-    assert hits and all(abs(d['amount'] - 20.0) < 1e-6 for d in hits), 'lunge damage %r' % [d['amount'] for d in hits]
+    assert hits and all(abs(d['amount'] - 20.0 * _pds()) < 1e-6 for d in hits),         'lunge damage %r' % [d['amount'] for d in hits]
     return 'lunges %d, first displacement %.2f, lunge hits %d, player_hurt %d' % (
         len(lunges), lunges[0][1], len(hits), r.count('player_hurt'))
 
@@ -133,7 +139,7 @@ def check_detonator(h):
     assert {'armed_a', 'armed_b'} <= seen, 'no blinking fuse (states %r)' % sorted(seen)
     assert r.count('explosion', team=1) >= 1, 'no explosion'
     hurt = r.where('player_hurt', ability='blast')
-    assert hurt and 30.0 - 1e-6 <= hurt[0]['amount'] <= 60.0 + 1e-6, 'blast player_hurt %r' % hurt[:1]
+    assert hurt and 30.0 * _pds() - 1e-6 <= hurt[0]['amount'] <= 60.0 * _pds() + 1e-6, 'blast player_hurt %r' % hurt[:1]
     assert not e.alive and r.world.score == 0 and r.count('kill') == 0, 'self-destruct must give no kill/score'
     arm = _runs(tr, 300, 'armed_a')[0][0]
     boom = r.frames_of('explosion')[0]
@@ -261,7 +267,8 @@ def check_warden(h):
     burst = [f for f in sentry if f < first + 4 * FPS + 2]
     assert 36 <= len(burst) <= 42, 'sentry fired %d bolts in 4 s (want ~40)' % len(burst)
     pr = [p for f, p in tr['bolts'] if p.ability == 'sentry'][0]
-    assert abs(pr.damage - 6.0) < 1e-6 and pr.color == (255, 220, 60), 'sentry bolt %r %r' % (pr.damage, pr.color)
+    assert abs(pr.damage - 6.0 * _pds()) < 1e-6 and pr.color == (255, 220, 60), 'sentry bolt %r %r' % (
+        pr.damage, pr.color)
     gaps = [b - a for a, b in zip(recon, recon[1:]) if b < first - FPS]
     assert gaps and min(gaps) >= int(0.6 * FPS) - 1, 'recon cadence %r (want 0.6 s)' % gaps[:6]
     assert r.count('sfx', name='warn') >= 1, 'no warn sfx on the windup'
@@ -317,7 +324,7 @@ def check_warden_stomp(h):
     assert st['ring'], 'no r 3.0 floor ring during the stomp windup'
     assert st['slow'] is not None, 'no slow status after the stomp'
     hurt = r.where('player_hurt', ability='stomp')
-    assert hurt and abs(hurt[0]['amount'] - 40.0) < 1e-6, 'stomp damage %r' % hurt[:1]
+    assert hurt and abs(hurt[0]['amount'] - 40.0 * _pds()) < 1e-6, 'stomp damage %r' % hurt[:1]
     assert abs(st['x0'] - st['x1']) >= 1.0, 'knockback moved the player %.2f' % abs(st['x0'] - st['x1'])
     return 'windup %d frames, slowed at frame %d, knocked back %.2f cells' % (
         wind[0][1], st['slow'], abs(st['x0'] - st['x1']))
@@ -448,7 +455,7 @@ def check_stage_scaling_and_elites(h):
         st['e'] = w.spawn_enemy('trooper', 7.5, 7.5, elite=True)
     r = h.run('vector', 120, timeline=[('call', 0, pre), ('call', 110, lambda w: _kill(w, st['e']))], name='scaling')
     raw = [d['amount'] for d in r.where('player_hurt', ability='bolt')]
-    assert raw and all(abs(a - 13.0) < 1e-6 for a in raw), 'stage-3 trooper bolt %r (want 13)' % raw
+    assert raw and all(abs(a - 13.0 * _pds()) < 1e-6 for a in raw), 'stage-3 trooper bolt %r (want 13 x lever)' % raw
     ks = r.where('kill', target=st['e'])
     assert ks and ks[0]['score'] == 10 * 2 * 3, 'elite stage-3 trooper score %r (want 60)' % [d['score'] for d in ks]
     # phase-2 shields at stage 3

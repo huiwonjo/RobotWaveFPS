@@ -1,6 +1,7 @@
 """Headless-browser smoke test of a pygbag build (FOUNDATION tool, not shipped).
 
     python -X utf8 tools/webtest.py [web_root=game/build/web] [out_prefix=tools/out/web]
+                                    [--hero vector|flicker|rampart] [--play SECONDS]
 
 Serves web_root on 127.0.0.1:8765 and opens index.html in headless Microsoft Edge (Playwright).
 The game publishes its screen state as window.RWF_STATE (app.py via core.web_set: TITLE, HERO_SELECT,
@@ -11,8 +12,15 @@ blindly, so it doesn't matter whether pygbag starts Python on its own or waits f
     W held, fire held -> screenshots, D held -> later screenshot, Esc -> PAUSED.
 Saves PNGs <prefix>_0_loaded .. _6_paused and prints the state trail and the console tail.
 Exit code 1 on a Python traceback in the console or when a wanted state never shows up.
+
+--hero picks the hero with its number key on HERO_SELECT. --play N (integration) then plays N more seconds
+before pausing: the player stays near the spawn corner, turning and holding fire, so the enemies walk up
+to it. With the debug overlay on, the game publishes window.RWF_PERF twice a second (fps, ms per system,
+alive enemies, nearest enemy distance); every sample is printed, plus the FPS p50 / p10 overall and with
+an enemy within 4 cells ("close").
 Needs network access to the pygame-web CDN and `pip install playwright`.
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -23,10 +31,38 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _perf_samples(lines):
+    out = []
+    for ln in lines:
+        d = {}
+        for tok in ln.split():
+            if '=' in tok:
+                k, v = tok.split('=', 1)
+                try:
+                    d[k] = float(v)
+                except ValueError:
+                    d[k] = v
+        if 'fps' in d:
+            out.append(d)
+    return out
+
+
+def _q(vals, q):
+    s = sorted(vals)
+    return s[min(len(s) - 1, int(len(s) * q))] if s else float('nan')
+
+
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'game', 'build', 'web')
-    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, 'tools', 'out', 'web')
+    ap = argparse.ArgumentParser()
+    ap.add_argument('root', nargs='?', default=os.path.join(ROOT, 'game', 'build', 'web'))
+    ap.add_argument('out', nargs='?', default=os.path.join(ROOT, 'tools', 'out', 'web'))
+    ap.add_argument('--hero', default=None, choices=('vector', 'flicker', 'rampart'))
+    ap.add_argument('--play', type=float, default=0.0)
+    a = ap.parse_args()
+    root = a.root
+    out = a.out
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+    perf = []
     srv = subprocess.Popen([sys.executable, '-m', 'http.server', '8765', '--bind', '127.0.0.1'], cwd=root,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     logs = []
@@ -84,6 +120,9 @@ def main():
                 time.sleep(0.3)
                 pg.keyboard.press('ArrowLeft')
                 time.sleep(0.5)
+                if a.hero:
+                    pg.keyboard.press(str(('vector', 'flicker', 'rampart').index(a.hero) + 1))
+                    time.sleep(0.5)
                 shot('2_select')
                 pg.keyboard.press('Enter')      # LOCK IN (VECTOR) -> COUNTDOWN
                 ok = wait('COUNTDOWN', 10, 'select')
@@ -109,6 +148,28 @@ def main():
                 pg.keyboard.up('d')
                 time.sleep(6.0)
                 shot('5_later')
+                if a.play > 0 and state() in ('PLAYING', 'INTERMISSION'):
+                    # back toward the corner and keep turning while firing: enemies walk up to us
+                    pg.keyboard.down('s')
+                    time.sleep(1.0)
+                    pg.keyboard.up('s')
+                    t_end = time.time() + a.play
+                    k = 0
+                    pg.mouse.down()
+                    while time.time() < t_end and state() in ('PLAYING', 'INTERMISSION'):
+                        pg.mouse.move(640 + (60 if k % 2 else -60), 400)
+                        time.sleep(0.5)
+                        k += 1
+                        try:
+                            v = pg.evaluate('() => (window.RWF_PERF === undefined ? null : String(window.RWF_PERF))')
+                        except Exception:
+                            v = None
+                        if v and (not perf or perf[-1] != v):
+                            perf.append(v)
+                        if k % 20 == 10:
+                            shot('7_play_%02d' % (k // 20))
+                    pg.mouse.up()
+                    shot('8_played')
                 if state() in ('PLAYING', 'INTERMISSION'):
                     pg.keyboard.press('Escape')     # pause (or pointer-lock loss -> auto-pause)
                     if wait('PAUSED', 5, 'pause'):
@@ -121,6 +182,18 @@ def main():
         srv.terminate()
     print('\n'.join(l[:220] for l in logs[-40:]))
     print('--- state trail: %s' % ' -> '.join(trail))
+    if perf:
+        for ln in perf:
+            print('PERF ' + ln)
+        smp = [d for d in _perf_samples(perf) if d.get('st') == 'PLAYING' and d.get('fps', 0) > 0]
+        close = [d for d in smp if d.get('near', 99) < 4.0]
+        for label, lst in (('all', smp), ('close', close)):
+            if lst:
+                f = [d['fps'] for d in lst]
+                t = [d['tot'] for d in lst]
+                print('--- FPS %s: n %d, p50 %.1f, p10 %.1f, min %.1f; work ms p50 %.1f p90 %.1f; max enemies %d' % (
+                    label, len(lst), _q(f, 0.5), _q(f, 0.1), min(f), _q(t, 0.5), _q(t, 0.9),
+                    max(int(d.get('en', 0)) for d in lst)))
     tb = [l for l in logs if 'Traceback' in l]
     print('--- %d console lines, %d with a traceback' % (len(logs), len(tb)))
     for pr in problems:

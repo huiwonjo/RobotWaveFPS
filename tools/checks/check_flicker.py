@@ -39,7 +39,7 @@ def check_flicker_attrs(h):
     assert c is hf.Flicker, 'registry does not hold hero_flicker.Flicker'
     got = (c.KEY, c.NAME, c.ROLE, c.DIFFICULTY, tuple(c.COLOR), c.HEALTH, c.ARMOR, c.SHIELDS, c.SPEED, c.ULT_COST,
            c.ULT_NAME, c.ULT_CALLOUT, c.MAX_AMMO, c.RELOAD_TIME, tuple(c.HUD_ORDER), c.BLURB)
-    want = ('flicker', 'FLICKER', 'DAMAGE', 3, (255, 150, 40), 150, 0, 0, 4.6, 1100, 'PULSE BOMB', 'BOMB AWAY!',
+    want = ('flicker', 'FLICKER', 'DAMAGE', 3, (255, 150, 40), 150, 0, 0, 4.6, 1210, 'PULSE BOMB', 'BOMB AWAY!',
             40, 1.0, ('ab1', 'ab2'), 'Blink through fights, rewind mistakes.')
     assert got == want, 'attrs %r' % (got,)
     keys = [k for k, _, _ in c.KIT]

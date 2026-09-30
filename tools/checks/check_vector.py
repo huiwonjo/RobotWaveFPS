@@ -48,7 +48,7 @@ def check_vector_attrs(h):
     c = core.HEROES['vector']
     got = (c.KEY, c.NAME, c.ROLE, c.DIFFICULTY, c.COLOR, c.HEALTH, c.ARMOR, c.SHIELDS, c.SPEED, c.ULT_COST,
            c.ULT_NAME, c.ULT_CALLOUT, c.ULT_DURATION, c.MAX_AMMO, c.RELOAD_TIME, c.HUD_ORDER)
-    want = ('vector', 'VECTOR', 'DAMAGE', 1, (80, 150, 255), 200, 0, 0, 4.2, 1500, 'LOCK-ON', 'LOCKED ON!', 6.0,
+    want = ('vector', 'VECTOR', 'DAMAGE', 1, (80, 150, 255), 200, 0, 0, 4.2, 1650, 'LOCK-ON', 'LOCKED ON!', 6.0,
             30, 1.5, ('ab1', 'ab2', 'secondary'))
     assert got == want, 'class attrs %r' % (got,)
     assert c.BLURB == 'Versatile rifleman. Rockets, sprint, self-heal.', c.BLURB

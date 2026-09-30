@@ -663,9 +663,10 @@ def check_enemy_stats(h):
 def check_hero_attrs(h):
     """3.4 class attributes the select screen and HUD read."""
     from rwf import core
-    want = {'vector': ('VECTOR', 'DAMAGE', 1, 200, 0, 0, 4.2, 1500, 'LOCK-ON', 'LOCKED ON!', 30, 1.5),
-            'flicker': ('FLICKER', 'DAMAGE', 3, 150, 0, 0, 4.6, 1100, 'PULSE BOMB', 'BOMB AWAY!', 40, 1.0),
-            'rampart': ('RAMPART', 'TANK', 2, 300, 200, 0, 3.9, 1400, 'QUAKE SLAM', 'QUAKE!', 0, 0)}
+    # ULT_COST: spec 1500 / 1100 / 1400, +10% after the integration balance pass (design/INTEGRATION_REPORT.md)
+    want = {'vector': ('VECTOR', 'DAMAGE', 1, 200, 0, 0, 4.2, 1650, 'LOCK-ON', 'LOCKED ON!', 30, 1.5),
+            'flicker': ('FLICKER', 'DAMAGE', 3, 150, 0, 0, 4.6, 1210, 'PULSE BOMB', 'BOMB AWAY!', 40, 1.0),
+            'rampart': ('RAMPART', 'TANK', 2, 300, 200, 0, 3.9, 1540, 'QUAKE SLAM', 'QUAKE!', 0, 0)}
     for key, t in want.items():
         c = core.HEROES[key]
         got = (c.NAME, c.ROLE, c.DIFFICULTY, c.HEALTH, c.ARMOR, c.SHIELDS, c.SPEED, c.ULT_COST, c.ULT_NAME,
@@ -818,6 +819,82 @@ def check_review_fixes(h):
     inp.sens = 1.7
     assert core.SETTINGS['sens'] == 1.7 and core.InputState().sens == 1.7
     inp.sens = old
+
+
+def check_integration_core_requests(h):
+    """Integration (Phase 2) CORE REQUESTs: Enemy.fire_bolt kwargs, combat.player_barrier_between, the
+    renderer's barrier look (hit flash / low HP / near-camera fade), sfx variants, the reload counting from
+    the next frame, and h.spawn_at."""
+    from rwf import combat, render, sfx
+    from rwf.config import TEAM_ENEMY, TEAM_PLAYER
+    w = h.make_world()
+    # 1. fire_bolt(ability=, core=, size=) tags and draws the bolt; damage still x dmg_mult
+    e = h.spawn(w, 'dummy', 4.0)
+    e.dmg_mult = 1.3
+    assert e.fire_bolt(w, math.pi, 8.0, 10.0, ability='recon', core=(1, 2, 3), size=0.11)
+    pr = w.projectiles[-1]
+    assert (pr.ability, pr.core, pr.size) == ('recon', (1, 2, 3), 0.11) and abs(pr.damage - 13.0) < 1e-9
+    # 2. player_barrier_between: nearest crossing player-team barrier, None otherwise
+    p = w.player
+    assert combat.player_barrier_between(w, e.x, e.y, p.x, p.y) is None
+    b = combat.Barrier(TEAM_PLAYER, 600, 1.2, owner=p)
+    b.set_pose(p.x + 1.0, p.y, 0.0)
+    assert w.add_barrier(b)
+    hit = combat.player_barrier_between(w, e.x, e.y, p.x, p.y)
+    assert hit is not None and hit[1] is b and 0.0 < hit[0] < 1.0
+    assert combat.enemy_hits_player(w, e, 20.0, (e.x, e.y)) == 0.0 and b.hp == 580.0
+    w.remove_barrier(b)
+    # 3. barrier look: base / hit flash / low HP, and faded near the camera
+    eb = combat.Barrier(TEAM_ENEMY, 400, 1.0, color_add=(80, 30, 18), edge=(255, 140, 70), color_hit=(150, 70, 40),
+                        edge_hit=(255, 240, 200), color_low=(90, 14, 10), edge_low=(255, 70, 50), z1=0.95)
+    eb.set_pose(p.x + 5.0, p.y, math.pi)
+    now = 10.0
+    assert render._barrier_look(eb, now, p.x, p.y) == ((80, 30, 18), (255, 140, 70))
+    eb.last_hit = now - 0.05
+    assert render._barrier_look(eb, now, p.x, p.y) == ((150, 70, 40), (255, 240, 200))
+    eb.last_hit = -9.0
+    eb.hp = 100.0
+    assert render._barrier_look(eb, now, p.x, p.y) == ((90, 14, 10), (255, 70, 50))
+    eb.hp = 400.0
+    col, _ = render._barrier_look(eb, now, p.x + 4.7, p.y)
+    assert col[0] < 80, 'a barrier at the camera must fade (got %r)' % (col,)
+    assert w.add_barrier(eb)
+    sc = render.build_scene(w)
+    segs = [it for it in sc.segments if it[4] == (80, 30, 18)]
+    assert segs and segs[0][6] == 0.95, 'enemy barrier not drawn by the renderer with its own colour / z1'
+    # 4. sfx 'variant': the variant's own name, else name_variant, else the plain name
+    played = []
+    old_play = sfx.play
+    sfx.play = lambda name, vol=1.0: played.append(name)
+    try:
+        sfx._on_sfx({'name': 'blink', 'variant': 'rewind', 'vol': 0.8})
+        sfx._on_sfx({'name': 'hammer', 'variant': 'low', 'vol': 1.0})
+        sfx._on_sfx({'name': 'beep', 'variant': 'nosuch', 'vol': 1.0})
+    finally:
+        sfx.play = old_play
+    assert played == ['rewind', 'hammer_low', 'beep'], played
+    assert 'heal' in sfx.RECIPES and 'hammer_low' in sfx.RECIPES
+    # 5. a reload started on frame N ends after exactly RELOAD_TIME (1.0 s = 30 frames for FLICKER)
+    st = {}
+
+    def on_frame(w2, i, state):
+        if w2.player.reloading:
+            st.setdefault('first', i)
+            st['last'] = i
+    r = h.run('flicker', 50, timeline=[('call', 3, lambda w2: setattr(w2.player, 'ammo', 5)),
+                                       ('tap', 5, 'reload')], on_frame=on_frame, name='reload_frames')
+    assert not r.exception
+    n = st['last'] - st['first'] + 1
+    assert n == 30, 'a 1.0 s reload showed reloading on %d frames (want 30)' % n
+    # 6. h.spawn_at: absolute position, faces the player, refuses walls
+    d = h.spawn_at(w, 'dummy', 10.5, 5.5, fire_every=None)
+    assert (d.x, d.y) == (10.5, 5.5)
+    try:
+        h.spawn_at(w, 'dummy', 0.5, 0.5)
+        raise AssertionError('spawn_at inside a wall did not raise')
+    except ValueError:
+        pass
+    return 'fire_bolt kwargs, barrier_between, barrier look, sfx variants, reload 30 frames, spawn_at'
 
 
 def check_hero_contracts(h):

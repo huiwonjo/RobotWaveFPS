@@ -272,7 +272,7 @@ class Rampart(Hero):
     ARMOR = 200
     SHIELDS = 0
     SPEED = 3.9
-    ULT_COST = 1400
+    ULT_COST = 1540                 # spec 1400; integration +10% (spec 9.6: charge was ~3x faster than 55 s)
     ULT_NAME = 'QUAKE SLAM'
     ULT_CALLOUT = 'QUAKE!'
     ULT_DURATION = 0.0

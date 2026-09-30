@@ -98,7 +98,7 @@ class Flicker(Hero):
     ARMOR = 0
     SHIELDS = 0
     SPEED = 4.6
-    ULT_COST = 1100
+    ULT_COST = 1210                 # spec 1100; integration +10% (spec 9.6: charge was ~2.5x faster than 40 s)
     ULT_NAME = 'PULSE BOMB'
     ULT_CALLOUT = 'BOMB AWAY!'
     ULT_DURATION = 0.0

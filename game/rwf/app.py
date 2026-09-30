@@ -128,6 +128,7 @@ class _Match:
             self.states = deque(maxlen=LIVE_HISTORY)
             self.frame_ms = deque(maxlen=LIVE_HISTORY)
         self._published = None
+        self._perf_pub = 0.0
         self.frame_i = 0
         self.action = None
         self.done = False
@@ -354,6 +355,11 @@ class _Match:
         if self.state != self._published:
             self._published = self.state
             core.web_set('RWF_STATE', self.state)
+        if core.IS_WEB and _app['debug']:
+            now_r = core.real_time()
+            if now_r >= self._perf_pub:          # test hook for tools/webtest.py (debug overlay on only)
+                self._perf_pub = now_r + 0.5
+                core.web_set('RWF_PERF', self._perf_line())
         self.frame_i += 1
         return not self.done
 
@@ -396,6 +402,17 @@ class _Match:
         if msg and core.real_time() < until:
             render.draw_toast(scr, msg)
         return t_render, t_hud
+
+    def _perf_line(self):
+        """One-line perf sample for window.RWF_PERF: fps, ms per system, enemies, nearest enemy distance."""
+        w = self.world
+        pf = w.perf or {}
+        p = w.player
+        al = w.alive_enemies()
+        near = min((((e.x - p.x) ** 2 + (e.y - p.y) ** 2) ** 0.5 for e in al), default=99.0)
+        return 'fps=%.1f upd=%.1f ren=%.1f hud=%.1f tot=%.1f en=%d near=%.1f hero=%s st=%s hp=%.0f wave=%d' % (
+            self.clock.get_fps(), pf.get('update', 0), pf.get('render', 0), pf.get('hud', 0), pf.get('total', 0),
+            len(al), near, p.KEY, self.state, p.pool.total, w.director.wave)
 
     def _debug_lines(self):
         w = self.world

@@ -38,6 +38,9 @@ from .world import OPEN_CELLS, is_wall
 
 # Spec 4.2-4.5 numbers (stage 1, before scaling). Bolt specs: (speed, radius, damage, ttl, color, core, size).
 TUNING = {
+    # integration balance lever (spec 9.6: enemy damage +-15%): scales every enemy attack on the PLAYER
+    # (bolts, melee, lunge, detonator blasts, stomp); enemy-on-enemy blast damage is not scaled
+    'player_damage_scale': 0.85,           # integration: -15% (autoplay: DPS heroes died in most stage runs)
     'direct_range': 3.0,                    # flow + direct steering blend (4.4)
     'elite_per_stage': 0.15, 'elite_max': 0.45,
     # TROOPER
@@ -82,6 +85,11 @@ _EPS = 1e-6         # timers: 0.4 s at 30 fps is 12 frames, not 13 after float r
 
 def _hypot(ax, ay, bx, by):
     return math.hypot(bx - ax, by - ay)
+
+
+def _pd(dmg):
+    """A stage-1 damage number aimed at the player, after the integration balance lever."""
+    return dmg * T['player_damage_scale']
 
 
 def _crosses_player_barrier(world, ax, ay, bx, by):
@@ -147,7 +155,7 @@ class _ChainBlast(Effect):
         splash(world, x, y, r, dmg, dmg, self.killer, TEAM_PLAYER, 'chain', exclude=(self.det,))
         p = world.player
         if p.alive and _hypot(x, y, p.x, p.y) <= r and world.los(x, y, p.x, p.y):
-            enemy_hits_player(world, self.det, T['det_chain_player_dmg'] * self.dm, (x, y), 'chain')
+            enemy_hits_player(world, self.det, _pd(T['det_chain_player_dmg']) * self.dm, (x, y), 'chain')
         _blast_fx(world, x, y, r, (255, 150, 40), 16)
 
     def emit_visuals(self, scene):
@@ -242,7 +250,7 @@ class _Robot(Enemy):
         if d <= reach and world.now >= self._melee_next and self.can_attack(world):
             self._melee_next = world.now + every
             self.face_player(world)
-            self.melee(world, dmg)
+            self.melee(world, _pd(dmg))
             self._attack_until = world.now + 0.15
             return True
         return False
@@ -250,7 +258,7 @@ class _Robot(Enemy):
     def shoot(self, world, angle, spec, ability='bolt'):
         """One enemy bolt (4.5) from a TUNING bolt spec, through Enemy.fire_bolt (which scales damage)."""
         speed, radius, dmg, ttl, color, core_col, size = spec
-        return self.fire_bolt(world, angle, speed, dmg, radius, color, ttl, ability=ability, core=core_col,
+        return self.fire_bolt(world, angle, speed, _pd(dmg), radius, color, ttl, ability=ability, core=core_col,
                               size=size)
 
     def aim(self, world, jitter_deg):
@@ -455,7 +463,8 @@ class Slicer(_Robot):
         dp = self.dist_to_player(world)
         if not self._hit_done and dp <= T['slicer_lunge_hit_r'] and self.can_attack(world):
             self._hit_done = True
-            enemy_hits_player(world, self, T['slicer_lunge_damage'] * self.dmg_mult, (self.x, self.y), 'lunge')
+            enemy_hits_player(world, self, _pd(T['slicer_lunge_damage']) * self.dmg_mult, (self.x, self.y),
+                              'lunge')
         if dp <= self.radius + C.PLAYER_RADIUS + 0.06 or self._travel >= T['slicer_lunge_dist'] - 1e-6:
             done = True
         if done:
@@ -532,7 +541,7 @@ class Detonator(_Robot):
         pd = _hypot(x, y, p.x, p.y)
         if p.alive and pd <= r and world.los(x, y, p.x, p.y):
             hi, lo = T['det_player_dmg']
-            enemy_hits_player(world, self, (hi + (lo - hi) * pd / r) * dm, (x, y), 'blast')
+            enemy_hits_player(world, self, _pd(hi + (lo - hi) * pd / r) * dm, (x, y), 'blast')
         _blast_fx(world, x, y, r, (255, 130, 40), 18)
 
     def on_death(self, world, source, ability):
@@ -848,7 +857,7 @@ class Warden(_Robot):
             world.shake(8 if d <= r else 4, 0.25)
         if not p.alive or d > r or p.status.taken_mult(now) <= 0.0:
             return
-        dmg = T['ward_stomp_damage'] * self.dmg_mult
+        dmg = _pd(T['ward_stomp_damage']) * self.dmg_mult
         if _crosses_player_barrier(world, x, y, p.x, p.y) is not None:
             enemy_hits_player(world, self, dmg, (x, y), 'stomp')     # the barrier takes it
             return

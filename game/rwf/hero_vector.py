@@ -241,7 +241,7 @@ class Vector(Hero):
     ARMOR = 0
     SHIELDS = 0
     SPEED = 4.2
-    ULT_COST = 1500
+    ULT_COST = 1650                 # spec 1500; integration +10% (spec 9.6: charge was ~2x faster than 60 s)
     ULT_NAME = 'LOCK-ON'
     ULT_CALLOUT = 'LOCKED ON!'
     ULT_DURATION = T['lockon_time']
